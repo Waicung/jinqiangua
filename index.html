@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>周易起卦</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <h1>周易起卦</h1>
+    </header>
+
+    <main id="main">
+      <!-- ── Idle Phase ── -->
+      <section id="phase-idle" class="phase active">
+        <div class="hero">
+          <div id="domain-display" class="domain-display">
+            <div class="domain-number">651372</div>
+            <div id="domain-hexagram" class="domain-hexagram"></div>
+            <div id="domain-name" class="domain-name"></div>
+          </div>
+          <p class="hero-text">以三枚硬币<br>起六爻之卦</p>
+          <button id="btn-start" class="btn-primary">起卦</button>
+        </div>
+      </section>
+
+      <!-- ── Casting Phase ── -->
+      <section id="phase-casting" class="phase">
+        <div class="throw-header">
+          <span id="throw-count">第 1 / 6 次</span>
+        </div>
+
+        <div id="coin-result" class="coin-result">
+          <span id="coin-num" class="coin-num">-</span>
+          <span id="coin-label" class="coin-label"></span>
+        </div>
+
+        <div id="hexagram-build" class="hexagram-display">
+          <!-- Lines built from bottom up by JS -->
+        </div>
+
+        <button id="btn-throw" class="btn-primary">摇卦</button>
+        <p id="throw-hint" class="hint-text">点击摇卦，掷三枚硬币</p>
+      </section>
+
+      <!-- ── Result Phase ── -->
+      <section id="phase-result" class="phase">
+        <div id="result-content"></div>
+        <button id="btn-reset" class="btn-secondary">重新起卦</button>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
