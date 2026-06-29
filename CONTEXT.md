@@ -33,3 +33,18 @@ _Avoid_：卜卦、占卜（过于宽泛）
 应用内置的格式化文本生成功能。用户在结果页输入问题后，一键生成包含本卦、变卦、动爻、爻辞等完整卦象信息的结构化 prompt，可复制到第三方 AI 助手进行解读。不涉及任何 API 调用，用户数据不离设备。
 _Use_：生成解卦提示、复制 prompt
 _Avoid_：AI 解卦（易误解为应用内集成 AI）
+
+**Service Worker（服务工作线程）**：
+浏览器后台脚本，拦截网络请求并从本地缓存响应，实现离线访问。采用 cache-first 策略：优先从缓存读取，缓存未命中时回退到网络，新获取的资源自动补充进缓存。SW 安装时预缓存全部静态资产（HTML/CSS/JS/JSON/图标），激活时清理旧版本缓存，安装后立即跳过等待（skipWaiting）并接管所有客户端（clients.claim）。
+_Use_：离线缓存、SW
+_Avoid_：Workers（易与 Cloudflare Workers 混淆）
+
+**manifest.json（应用清单）**：
+PWA 安装清单文件，定义应用名称、图标、主题色、显示模式（standalone）。浏览器读取后允许用户将应用添加到主屏幕，获得类似原生应用的启动体验。主题色 #292524（深墨色），背景色 #fafaf9（宣纸色）。
+_Use_：应用清单、PWA 清单
+_Avoid_：配置文件（过于泛泛）
+
+**离线可用**：
+应用在无网络连接时仍可完整运行。当前实现通过 Service Worker 缓存所有资产（index.html, style.css, app.js, manifest.json, icons, data/iching.json）。起卦流程（摇卦→生成卦象→显示卦辞爻辞→生成解卦提示）全程不依赖网络。分享到 Gemini 按钮在离线时自然降级（打开链接失败），不影响核心功能。
+_Use_：离线可用、离线就绪
+_Avoid_：纯离线（暗示不能在线使用）
