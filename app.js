@@ -23,6 +23,11 @@ const LINE_INFO = {
 
 const POSITION_NAMES = ['初', '二', '三', '四', '五', '上'];
 
+const TRIGRAM_SYMBOLS = {
+  '111': '☰', '110': '☱', '101': '☲', '100': '☳',
+  '011': '☴', '010': '☵', '001': '☶', '000': '☷',
+};
+
 function posLabel(index, isYang) {
   // index 0-5 (bottom to top)
   const yao = isYang ? '九' : '六';
@@ -38,6 +43,13 @@ const state = {
   currentThrow: 0,     // 0-5
   animating: false,
   showAllLines: false,
+  // Hexagram data for prompt generation
+  primary: null,
+  transformed: null,
+  movingLines: [],
+  numbers: [],
+  primaryLineTypes: [],
+  transformedLineTypes: [],
 };
 
 // ── 5. Core logic ─────────────────────────────────────
@@ -190,6 +202,14 @@ function showResult() {
   });
   const transformedLineTypes = transformedBits.map((b) => (b === '1' ? 'yang' : 'yin'));
 
+  // Store hexagram data in state for prompt generation
+  state.primary = primary;
+  state.transformed = transformed;
+  state.movingLines = movingLines;
+  state.numbers = numbers;
+  state.primaryLineTypes = primaryLineTypes;
+  state.transformedLineTypes = transformedLineTypes;
+
   // Build result HTML
   const container = $('result-content');
   container.innerHTML = '';
@@ -220,6 +240,9 @@ function showResult() {
     // No moving lines → no transformation
     container.appendChild(renderNoChangeNote());
   }
+
+  // ── AI prompt section ──
+  container.appendChild(renderPromptSection());
 
   showPhase('phase-result');
   state.phase = 'result';
@@ -337,7 +360,149 @@ function renderNoChangeNote() {
   return div;
 }
 
-// ── 10. Domain hexagram ────────────────────────────────
+// ── 10. AI Prompt ─────────────────────────────────────
+function renderPromptSection() {
+  const section = document.createElement('div');
+  section.className = 'result-section prompt-section';
+  section.innerHTML = `
+    <h2>🤖 AI 解卦提示</h2>
+    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt，粘贴到任意 AI 助手（如 ChatGPT、Claude）获取解读。</p>
+    <textarea id="prompt-question" class="prompt-input" rows="2" placeholder="输入你想问的问题（选填）…"></textarea>
+    <button id="btn-gen-prompt" class="btn-secondary prompt-btn">生成解卦提示</button>
+    <div id="prompt-output" class="prompt-output" style="display:none;">
+      <div class="prompt-label">📋 解卦 Prompt（点击复制）</div>
+      <pre id="prompt-text" class="prompt-text"></pre>
+      <button id="btn-copy-prompt" class="btn-secondary prompt-btn">复制到剪贴板</button>
+      <span id="copy-feedback" class="copy-feedback"></span>
+    </div>
+  `;
+  return section;
+}
+
+function trigramInfo(binary) {
+  const lower = binary.slice(0, 3);
+  const upper = binary.slice(3, 6);
+  const names = DATA.trigramNames;
+  return {
+    lowerBin: lower,
+    upperBin: upper,
+    lowerName: names[lower],
+    upperName: names[upper],
+    lowerSymbol: TRIGRAM_SYMBOLS[lower],
+    upperSymbol: TRIGRAM_SYMBOLS[upper],
+  };
+}
+
+function generatePrompt() {
+  const question = $('prompt-question').value.trim() || '（未提供具体问题，请从卦象角度进行一般性解读）';
+  const p = state.primary;
+  const t = state.transformed;
+  const mls = state.movingLines;
+  const nums = state.numbers;
+  const lineTypes = state.primaryLineTypes;
+
+  const pTri = trigramInfo(p.binary);
+
+  let prompt = `# 周易起卦 — 解卦请求
+
+## 用户问题
+${question}
+
+`;
+
+  // ── 本卦 ──
+  prompt += `## 本卦：${p.symbol} ${p.name}（第${p.id}卦）
+`;
+  prompt += `卦辞：${p.judgment}
+`;
+  prompt += `上卦：${pTri.upperSymbol} ${pTri.upperName}（${pTri.upperBin}）
+`;
+  prompt += `下卦：${pTri.lowerSymbol} ${pTri.lowerName}（${pTri.lowerBin}）
+
+`;
+  prompt += `### 爻辞
+`;
+  for (let i = 0; i < 6; i++) {
+    const isYang = lineTypes[i] === 'yang';
+    const pos = posLabel(i, isYang);
+    const symbol = isYang ? '⚊' : '⚋';
+    prompt += `- ${pos} ${symbol}：${p.lines[i].text}
+`;
+  }
+
+  // ── 动爻 ──
+  if (mls.length > 0) {
+    prompt += `
+### 动爻
+`;
+    mls.forEach((ml) => {
+      const isYang = lineTypes[ml.index] === 'yang';
+      const symbol = isYang ? '⚊' : '⚋';
+      const oldType = nums[ml.index] === 6 ? '老阴（⚋→⚊）' : '老阳（⚊→⚋）';
+      prompt += `- ${ml.position} ${symbol}：${ml.text}（${oldType}）
+`;
+    });
+
+    // ── 变卦 ──
+    const tTri = trigramInfo(t.binary);
+    prompt += `
+## 变卦：${t.symbol} ${t.name}（第${t.id}卦）
+`;
+    prompt += `卦辞：${t.judgment}
+`;
+    prompt += `上卦：${tTri.upperSymbol} ${tTri.upperName}（${tTri.upperBin}）
+`;
+    prompt += `下卦：${tTri.lowerSymbol} ${tTri.lowerName}（${tTri.lowerBin}）
+`;
+  }
+
+  // ── 解卦指令 ──
+  prompt += `
+---
+
+## 解卦要求
+
+你是一位精通《周易》的占卜解卦师。请根据以上卦象信息，结合用户的问题，进行专业解卦分析。请从以下角度展开：
+
+1. **本卦解读**：本卦的卦象、卦辞对用户问题的启示是什么？上下卦的组合（${pTri.upperSymbol}${pTri.upperName} + ${pTri.lowerSymbol}${pTri.lowerName}）象征什么情境？
+`;
+
+  if (mls.length > 0) {
+    prompt += `2. **动爻分析**：动爻的变化揭示了什么转机、警示或关键节点？为什么这些爻位在此时发生变化？
+3. **变卦趋势**：从本卦到变卦的转化预示了什么样的发展方向？变卦的卦辞如何补充本卦的信息？
+4. **综合建议**：结合用户的具体处境，给出指向性的行动建议或思考方向。
+`;
+  } else {
+    prompt += `2. **静卦解读**：本次无动爻，以本卦卦辞为占。卦辞对用户问题的直接启示是什么？
+3. **综合建议**：结合用户的具体处境，给出指向性的行动建议或思考方向。
+`;
+  }
+
+  $('prompt-text').textContent = prompt;
+  $('prompt-output').style.display = 'block';
+  $('copy-feedback').textContent = '';
+}
+
+function copyPrompt() {
+  const text = $('prompt-text').textContent;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    $('copy-feedback').textContent = '✅ 已复制！';
+    setTimeout(() => { $('copy-feedback').textContent = ''; }, 2000);
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    $('copy-feedback').textContent = '✅ 已复制！';
+    setTimeout(() => { $('copy-feedback').textContent = ''; }, 2000);
+  });
+}
+
+// ── 11. Domain hexagram ────────────────────────────────
 const DOMAIN_DIGITS = [1, 6, 4, 8, 3, 9];
 
 function getDomainHexagram() {
@@ -388,6 +553,12 @@ function setupEvents() {
     allLines.style.display = isHidden ? 'block' : 'none';
     toggleBtn.textContent = isHidden ? '收起爻辞' : '显示全部爻辞';
     toggleBtn.classList.toggle('active', isHidden);
+  });
+
+  // Prompt generation
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#btn-gen-prompt')) generatePrompt();
+    if (e.target.closest('#btn-copy-prompt')) copyPrompt();
   });
 }
 
