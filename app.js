@@ -215,7 +215,7 @@ function addBuildLine(index, info) {
   const container = $('hexagram-build');
   const slot = container.querySelector(`[data-index="${index}"]`);
   slot.className = `hexagram-line ${info.yang ? 'yang' : 'yin'} reveal`;
-  slot.innerHTML = `<span class="line-visual"></span><span class="line-label">${posLabel(index, info.yang)}</span>`;
+  slot.innerHTML = '<span class="line-visual"></span>';
   setTimeout(() => slot.classList.remove('reveal'), 300);
 }
 
