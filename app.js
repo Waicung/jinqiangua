@@ -55,7 +55,8 @@ const state = {
 // ── 5. Core logic ─────────────────────────────────────
 function tossCoins() {
   const coin = () => (Math.random() < 0.5 ? 3 : 2);
-  return coin() + coin() + coin();
+  const values = [coin(), coin(), coin()];
+  return { values, sum: values[0] + values[1] + values[2] };
 }
 
 function getPrimaryHexagram(binary) {
@@ -110,8 +111,14 @@ function startDivination() {
   state.showAllLines = false;
 
   $('throw-count').textContent = '第 1 / 6 次';
-  $('coin-num').textContent = '-';
-  $('coin-label').textContent = '';
+  // Reset coins
+  const coinEls = $('coin-result').querySelectorAll('.coin');
+  coinEls.forEach((c) => {
+    c.className = 'coin';
+    c.querySelector('.coin-face').textContent = '—';
+  });
+  $('coin-num').textContent = '—';
+  $('coin-num').className = 'coin-num';
   // Reset placeholder lines
   const build = $('hexagram-build');
   build.querySelectorAll('.hexagram-line').forEach((el) => {
@@ -130,33 +137,61 @@ function doThrow() {
   if (state.animating || state.phase !== 'casting') return;
 
   const btn = $('btn-throw');
+  const coinResultEl = $('coin-result');
+  const coinEls = coinResultEl.querySelectorAll('.coin');
   const numEl = $('coin-num');
-  const labelEl = $('coin-label');
-  const coinEl = $('coin-result');
 
   btn.disabled = true;
   state.animating = true;
-  coinEl.classList.add('flicker');
+  coinResultEl.classList.add('flicker');
 
-  // Flicker: rapidly change numbers
-  const interval = setInterval(() => {
-    const r = Math.floor(Math.random() * 4) + 6;
-    numEl.textContent = r;
-    labelEl.textContent = LINE_INFO[r].name;
+  // ── Reset coins for fresh flicker ──
+  coinEls.forEach((c) => {
+    c.className = 'coin';
+    c.querySelector('.coin-face').textContent = '—';
+  });
+  numEl.className = 'coin-num';
+  numEl.textContent = '—';
+
+  // ── Flicker: each coin flips 2↔3 independently ──
+  const coinIntervals = [];
+  coinEls.forEach((coin, i) => {
+    const face = coin.querySelector('.coin-face');
+    const interval = setInterval(() => {
+      face.textContent = Math.random() < 0.5 ? '2' : '3';
+    }, 40 + i * 12); // slightly staggered for organic feel
+    coinIntervals.push(interval);
+  });
+
+  // ── Flicker: sum dances between 6–9 ──
+  const sumInterval = setInterval(() => {
+    numEl.textContent = String(Math.floor(Math.random() * 4) + 6);
   }, 50);
 
-  // Settle after 0.8s
+  // ── Settle after 1.2s (slower = more deliberate) ──
+  const settleDelay = 1200;
   setTimeout(() => {
-    clearInterval(interval);
-    coinEl.classList.remove('flicker');
+    coinIntervals.forEach(clearInterval);
+    clearInterval(sumInterval);
+    coinResultEl.classList.remove('flicker');
 
     const result = tossCoins();
-    const info = LINE_INFO[result];
+    const info = LINE_INFO[result.sum];
 
-    numEl.textContent = result;
-    labelEl.textContent = info.name;
+    // ── Settle individual coins ──
+    coinEls.forEach((coin, i) => {
+      const val = result.values[i];
+      const face = coin.querySelector('.coin-face');
+      face.textContent = val;
+      coin.classList.add('settling');
+      coin.classList.add(val === 3 ? 'heads' : 'tails');
+    });
 
-    state.throws.push({ num: result, ...info });
+    // ── Settle sum ──
+    numEl.textContent = result.sum;
+    numEl.classList.add('settled');
+
+    state.throws.push({ num: result.sum, ...info });
     state.currentThrow++;
 
     // Add line to building hexagram
@@ -172,7 +207,7 @@ function doThrow() {
     }
 
     state.animating = false;
-  }, 800);
+  }, settleDelay);
 }
 
 // ── 8. Build hexagram line rendering ─────────────────

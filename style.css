@@ -191,40 +191,178 @@ body {
   font-size: 0.875rem;
   color: var(--text-secondary);
   margin-bottom: 20px;
+  letter-spacing: 0.12em;
 }
 
+/* ── Ancient Coins Row ── */
 .coin-result {
-  width: 140px;
-  height: 140px;
-  border-radius: 50%;
-  background: var(--surface);
-  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 24px;
   margin-bottom: 24px;
-  transition: transform 0.15s ease;
-}
-.coin-result.flicker {
-  animation: flicker-pulse 0.1s ease-in-out infinite alternate;
+  min-height: 150px;
+  justify-content: center;
 }
 
-@keyframes flicker-pulse {
-  0% { transform: scale(1); }
-  100% { transform: scale(1.03); }
+.coins-row {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  align-items: center;
+}
+
+/* ── Ancient Chinese Coin (方孔钱) ── */
+.coin {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2.5px solid var(--text);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.3s, background 0.3s, box-shadow 0.3s;
+}
+
+/* Outer rim detail (外廓) */
+.coin::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  pointer-events: none;
+  transition: border-color 0.3s, opacity 0.3s;
+}
+
+/* Square hole (方孔) — outline only, so centered number stays clean */
+.coin::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  border: 1px solid var(--border);
+  transition: border-color 0.3s;
+}
+
+/* Number centered over the coin */
+.coin-face {
+  position: relative;
+  z-index: 1;
+  font-size: 1rem;
+  font-weight: 700;
+  transition: color 0.3s;
+  line-height: 1;
+}
+
+/* ── Coin flicker — chaotic tumbling ── */
+.coin-result.flicker .coin {
+  animation: coin-chaos 0.08s ease-in-out infinite alternate;
+}
+.coin-result.flicker .coin:nth-child(1) { animation-delay: 0s; }
+.coin-result.flicker .coin:nth-child(2) { animation-delay: 0.025s; }
+.coin-result.flicker .coin:nth-child(3) { animation-delay: 0.05s; }
+
+@keyframes coin-chaos {
+  0% {
+    transform: rotate(-4deg) scale(1);
+    border-color: var(--border);
+  }
+  100% {
+    transform: rotate(4deg) scale(1.05);
+    border-color: var(--text);
+  }
+}
+
+/* ── Settled states ── */
+/* Heads (yang / 3) — solid ink, hole and rim recede */
+.coin.heads {
+  background: var(--text);
+  border-color: var(--text);
+  box-shadow: 0 2px 8px rgba(28,25,23,0.15);
+}
+.coin.heads .coin-face {
+  color: #fff;
+}
+.coin.heads::before {
+  border-color: rgba(255,255,255,0.2);
+}
+.coin.heads::after {
+  border-color: rgba(255,255,255,0.2);
+}
+
+/* Tails (yin / 2) — hollow, warm paper tone */
+.coin.tails {
+  background: var(--surface);
+  border-color: var(--text-secondary);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.coin.tails .coin-face {
+  color: var(--text-secondary);
+}
+.coin.tails::before {
+  border-color: var(--border);
+}
+.coin.tails::after {
+  border-color: var(--border);
+}
+
+/* ── Settle animation (ink-drop) ── */
+.coin.settling {
+  animation: ink-drop 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes ink-drop {
+  0% {
+    transform: scale(1.2);
+    opacity: 0.7;
+    filter: blur(1px);
+  }
+  50% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/* ── Coin sum ── */
+.coin-sum {
+  text-align: center;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .coin-num {
-  font-size: 2.5rem;
-  font-weight: 700;
-  color: var(--text);
-  line-height: 1;
-}
-.coin-label {
-  font-size: 0.875rem;
+  font-size: 1.5rem;
+  font-weight: 300;
   color: var(--text-secondary);
-  margin-top: 4px;
+  letter-spacing: 0.1em;
+  transition: color 0.3s, font-weight 0.3s;
+  font-variant-numeric: tabular-nums;
+}
+
+.coin-result.flicker .coin-num {
+  animation: sum-flicker 0.08s ease-in-out infinite alternate;
+}
+
+@keyframes sum-flicker {
+  0% { opacity: 0.4; transform: scale(0.98); }
+  100% { opacity: 1; transform: scale(1.02); }
+}
+
+.coin-num.settled {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 1.625rem;
 }
 
 /* ── Hexagram Display ── */
