@@ -100,7 +100,12 @@ function startDivination() {
   $('throw-count').textContent = '第 1 / 6 次';
   $('coin-num').textContent = '-';
   $('coin-label').textContent = '';
-  $('hexagram-build').innerHTML = '';
+  // Reset placeholder lines
+  const build = $('hexagram-build');
+  build.querySelectorAll('.hexagram-line').forEach((el) => {
+    el.className = 'hexagram-line placeholder';
+    el.innerHTML = '';
+  });
   $('btn-throw').disabled = false;
   $('throw-hint').textContent = '点击摇卦，掷三枚硬币';
 
@@ -161,13 +166,10 @@ function doThrow() {
 // ── 8. Build hexagram line rendering ─────────────────
 function addBuildLine(index, info) {
   const container = $('hexagram-build');
-  const div = document.createElement('div');
-  div.className = `hexagram-line ${info.yang ? 'yang' : 'yin'}`;
-  div.innerHTML = `<span class="line-visual"></span><span class="line-label">${posLabel(index, info.yang)}</span>`;
-  // Append keeps stacking from bottom due to flex-direction: column-reverse on parent
-  // Actually, with column-reverse, appendChild adds to the "visual bottom"
-  // Let me use prependChild to add at top (which is visual bottom)
-  container.appendChild(div);
+  const slot = container.querySelector(`[data-index="${index}"]`);
+  slot.className = `hexagram-line ${info.yang ? 'yang' : 'yin'} reveal`;
+  slot.innerHTML = `<span class="line-visual"></span><span class="line-label">${posLabel(index, info.yang)}</span>`;
+  setTimeout(() => slot.classList.remove('reveal'), 300);
 }
 
 // ── 9. Result rendering ──────────────────────────────
@@ -336,7 +338,7 @@ function renderNoChangeNote() {
 }
 
 // ── 10. Domain hexagram ────────────────────────────────
-const DOMAIN_DIGITS = [6, 5, 1, 3, 7, 2];
+const DOMAIN_DIGITS = [1, 6, 4, 8, 3, 9];
 
 function getDomainHexagram() {
   // Even → yin (0), odd → yang (1), from bottom to top

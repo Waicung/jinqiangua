@@ -244,8 +244,16 @@ body {
   width: 100%;
   max-width: 200px;
   height: 30px;
+  opacity: 1;
+  transform: none;
+}
+
+.hexagram-line.placeholder {
   opacity: 0;
-  transform: translateY(10px);
+  visibility: hidden;
+}
+
+.hexagram-line.reveal {
   animation: line-enter 0.3s ease forwards;
 }
 
