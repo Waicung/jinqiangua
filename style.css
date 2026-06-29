@@ -475,6 +475,26 @@ body {
   width: 100%;
 }
 
+.prompt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.prompt-actions .prompt-btn {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.prompt-actions .btn-primary {
+  background: #1a73e8;
+  color: #fff;
+}
+.prompt-actions .btn-primary:hover {
+  background: #1557b0;
+}
+
 .prompt-output {
   margin-top: 16px;
 }

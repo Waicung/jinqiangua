@@ -366,13 +366,16 @@ function renderPromptSection() {
   section.className = 'result-section prompt-section';
   section.innerHTML = `
     <h2>🤖 AI 解卦提示</h2>
-    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt，粘贴到任意 AI 助手（如 ChatGPT、Claude）获取解读。</p>
+    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt。复制后可通过系统分享直接发送到 <strong>Gemini</strong> 或其他 AI 应用。</p>
     <textarea id="prompt-question" class="prompt-input" rows="2" placeholder="输入你想问的问题（选填）…"></textarea>
     <button id="btn-gen-prompt" class="btn-secondary prompt-btn">生成解卦提示</button>
     <div id="prompt-output" class="prompt-output" style="display:none;">
-      <div class="prompt-label">📋 解卦 Prompt（点击复制）</div>
+      <div class="prompt-label">📋 解卦 Prompt</div>
       <pre id="prompt-text" class="prompt-text"></pre>
-      <button id="btn-copy-prompt" class="btn-secondary prompt-btn">复制到剪贴板</button>
+      <div class="prompt-actions">
+        <button id="btn-copy-prompt" class="btn-secondary prompt-btn">📋 复制</button>
+        <button id="btn-share-gemini" class="btn-primary prompt-btn">🚀 在 Gemini 中打开</button>
+      </div>
       <span id="copy-feedback" class="copy-feedback"></span>
     </div>
   `;
@@ -486,20 +489,49 @@ ${question}
 function copyPrompt() {
   const text = $('prompt-text').textContent;
   if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    $('copy-feedback').textContent = '✅ 已复制！';
-    setTimeout(() => { $('copy-feedback').textContent = ''; }, 2000);
-  }).catch(() => {
-    // Fallback
+  copyText(text);
+  $('copy-feedback').textContent = '✅ 已复制！';
+  setTimeout(() => { $('copy-feedback').textContent = ''; }, 2000);
+}
+
+async function shareToGemini() {
+  const text = $('prompt-text').textContent;
+  if (!text) return;
+
+  // First ensure clipboard has the text
+  await copyText(text);
+
+  // Try native share — surfaces installed apps (Gemini, Claude, ChatGPT, etc.)
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: '周易起卦 — 解卦请求',
+        text: text,
+      });
+      return;
+    } catch (err) {
+      // User cancelled share sheet — that's fine, do nothing
+      if (err.name !== 'AbortError') {
+        console.warn('Share failed:', err);
+      }
+    }
+  }
+
+  // Fallback: open Gemini web with a prompt to paste
+  window.open('https://gemini.google.com', '_blank');
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
     const ta = document.createElement('textarea');
     ta.value = text;
     document.body.appendChild(ta);
     ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
-    $('copy-feedback').textContent = '✅ 已复制！';
-    setTimeout(() => { $('copy-feedback').textContent = ''; }, 2000);
-  });
+  }
 }
 
 // ── 11. Domain hexagram ────────────────────────────────
@@ -555,10 +587,11 @@ function setupEvents() {
     toggleBtn.classList.toggle('active', isHidden);
   });
 
-  // Prompt generation
+  // Prompt generation & sharing
   document.addEventListener('click', (e) => {
     if (e.target.closest('#btn-gen-prompt')) generatePrompt();
     if (e.target.closest('#btn-copy-prompt')) copyPrompt();
+    if (e.target.closest('#btn-share-gemini')) shareToGemini();
   });
 }
 
