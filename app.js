@@ -50,7 +50,39 @@ const state = {
   numbers: [],
   primaryLineTypes: [],
   transformedLineTypes: [],
+  geminiAvailable: true,
 };
+
+// ── 4.5. Gemini connectivity check ────────────────────
+async function checkGeminiConnectivity() {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    // Try a simple GET and inspect the response where possible. Some hosts
+    // return an opaque response with status 0 when mode: 'no-cors' is used,
+    // so treat status 0 as a possible success rather than a hard failure.
+    const res = await fetch('https://gemini.google.com/', {
+      mode: 'no-cors',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (res && (res.status === 0 || (res.status >= 200 && res.status < 300))) {
+      console.log('Gemini connectivity check passed.');
+      state.geminiAvailable = true;
+    } else if (res && res.status === 403) {
+      console.warn('Gemini reachable but returned 403 Forbidden. Access denied.');
+      state.geminiAvailable = false;
+    } else {
+      console.warn('Gemini connectivity check returned unexpected status:', res && res.status);
+      state.geminiAvailable = false;
+    }
+  } catch {
+    state.geminiAvailable = false;
+    console.warn('Gemini connectivity check failed. Falling back to Doubao.');
+  }
+  // 检测完成后更新 UI（如果按钮已渲染）
+  updateShareButtonUI();
+}
 
 // ── 5. Core logic ─────────────────────────────────────
 function tossCoins() {
@@ -135,6 +167,11 @@ function startDivination() {
 // ── 7. Coin throw animation ──────────────────────────
 function doThrow() {
   if (state.animating || state.phase !== 'casting') return;
+
+  // 用户首次点击「摇卦」时后台检测 Gemini 连通性
+  if (state.currentThrow === 0) {
+    checkGeminiConnectivity();
+  }
 
   const btn = $('btn-throw');
   const coinResultEl = $('coin-result');
@@ -396,12 +433,26 @@ function renderNoChangeNote() {
 }
 
 // ── 10. AI Prompt ─────────────────────────────────────
+function updateShareButtonUI() {
+  const btn = document.getElementById('btn-share-ai');
+  const desc = document.querySelector('.prompt-desc');
+  if (!btn) return; // 还未渲染，跳过
+
+  if (state.geminiAvailable) {
+    btn.textContent = '🚀 在 Gemini 中打开';
+    if (desc) desc.innerHTML = '输入你的问题，一键生成结构化解卦 prompt。复制后可直接在 <strong>Gemini</strong> 中打开。';
+  } else {
+    btn.textContent = '📋 复制到豆包';
+    if (desc) desc.innerHTML = '输入你的问题，一键生成结构化解卦 prompt。复制后可直接打开 <strong>豆包</strong>。';
+  }
+}
+
 function renderPromptSection() {
   const section = document.createElement('div');
   section.className = 'result-section prompt-section';
   section.innerHTML = `
     <h2>🤖 AI 解卦提示</h2>
-    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt。复制后可通过系统分享直接发送到 <strong>Gemini</strong> 或其他 AI 应用。</p>
+    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt。复制后可直接在 <strong>Gemini</strong> 中打开。</p>
     <textarea id="prompt-question" class="prompt-input" rows="2" placeholder="输入你想问的问题（选填）…"></textarea>
     <button id="btn-gen-prompt" class="btn-secondary prompt-btn">生成解卦提示</button>
     <div id="prompt-output" class="prompt-output" style="display:none;">
@@ -409,11 +460,13 @@ function renderPromptSection() {
       <pre id="prompt-text" class="prompt-text"></pre>
       <div class="prompt-actions">
         <button id="btn-copy-prompt" class="btn-secondary prompt-btn">📋 复制</button>
-        <button id="btn-share-gemini" class="btn-primary prompt-btn">🚀 在 Gemini 中打开</button>
+        <button id="btn-share-ai" class="btn-primary prompt-btn">🚀 在 Gemini 中打开</button>
       </div>
       <span id="copy-feedback" class="copy-feedback"></span>
     </div>
   `;
+  // DOM 创建后立即根据当前检测状态更新按钮文案
+  setTimeout(() => updateShareButtonUI(), 0);
   return section;
 }
 
@@ -552,8 +605,13 @@ async function shareToGemini() {
     }
   }
 
-  // Fallback: open Gemini web with a prompt to paste
-  window.open('https://gemini.google.com', '_blank');
+  // Fallback: open appropriate AI app based on availability
+  if (state.geminiAvailable) {
+    window.open('https://gemini.google.com', '_blank');
+  } else {
+    // Try doubao deep link first, then website
+    window.open('https://www.doubao.com/', '_blank');
+  }
 }
 
 async function copyText(text) {
@@ -626,7 +684,7 @@ function setupEvents() {
   document.addEventListener('click', (e) => {
     if (e.target.closest('#btn-gen-prompt')) generatePrompt();
     if (e.target.closest('#btn-copy-prompt')) copyPrompt();
-    if (e.target.closest('#btn-share-gemini')) shareToGemini();
+    if (e.target.closest('#btn-share-ai')) shareToGemini();
   });
 }
 
