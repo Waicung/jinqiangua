@@ -627,7 +627,49 @@ async function copyText(text) {
   }
 }
 
-// ── 11. Domain hexagram ────────────────────────────────
+// ── 10.5. Online status ──────────────────────────────────
+function updateOnlineStatus() {
+  const btn = $('btn-refresh');
+  if (!btn) return;
+  if (navigator.onLine) {
+    btn.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+
+// ── 11. Force Refresh ───────────────────────────────────
+async function forceRefresh() {
+  const btn = $('btn-refresh');
+  btn.classList.add('refreshing');
+  btn.title = '刷新中…';
+
+  try {
+    // 1. If there's a waiting service worker, tell it to skip waiting
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      const registration = await navigator.serviceWorker.ready;
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      }
+    }
+
+    // 2. Clear all caches
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+    }
+
+    // 3. Reload the page with a cache-busting param
+    const t = Date.now();
+    window.location.href = window.location.pathname + '?v=' + t;
+  } catch (err) {
+    console.error('Force refresh failed:', err);
+    // Fallback: hard reload
+    window.location.reload(true);
+  }
+}
+
+// ── 12. Domain hexagram ────────────────────────────────
 const DOMAIN_DIGITS = [1, 6, 4, 8, 3, 9];
 
 function getDomainHexagram() {
@@ -686,6 +728,9 @@ function setupEvents() {
     if (e.target.closest('#btn-copy-prompt')) copyPrompt();
     if (e.target.closest('#btn-share-ai')) shareToGemini();
   });
+
+  // Force refresh
+  $('btn-refresh').addEventListener('click', forceRefresh);
 }
 
 // ── 11. Init ──────────────────────────────────────────
@@ -695,6 +740,11 @@ async function init() {
   $('btn-start').disabled = false;
   $('btn-start').textContent = '起卦';
   setupEvents();
+
+  // Online status for refresh button
+  updateOnlineStatus();
+  window.addEventListener('online', updateOnlineStatus);
+  window.addEventListener('offline', updateOnlineStatus);
 }
 
 init();
