@@ -1,7 +1,10 @@
 {
   "name": "jinqiangua",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
+    "version": "bun run scripts/version.mjs",
+    "predeploy": "bun run scripts/version.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

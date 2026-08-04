@@ -788,6 +788,32 @@ async function init() {
   updateOnlineStatus();
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
+
+  // Version badge (bottom-right corner)
+  initVersionBadge();
+}
+
+// ── 12. Version badge ────────────────────────────────
+// Reads version.json (generated at deploy time) and shows
+// the version in the bottom-right corner. Hidden when no
+// version.json exists (e.g. local dev).
+async function initVersionBadge() {
+  const el = $('version-badge');
+  if (!el) return;
+  try {
+    const res = await fetch('version.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const v = await res.json();
+    el.textContent = `v${v.version} · ${v.commit}`;
+    el.title = [
+      `周易起卦 v${v.version}`,
+      `Git: ${v.describe}`,
+      v.branch ? `分支: ${v.branch}` : null,
+      `构建时间: ${v.buildTime}`,
+    ].filter(Boolean).join('\n');
+  } catch {
+    el.style.display = 'none';
+  }
 }
 
 init();

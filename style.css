@@ -761,3 +761,28 @@ body {
     padding: 0 24px;
   }
 }
+
+/* ── Version badge (bottom-right corner) ── */
+.version-badge {
+  position: fixed;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 100;
+  font-size: 0.6875rem;
+  line-height: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.5rem;
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  opacity: 0.7;
+  user-select: none;
+  cursor: help;
+  transition: opacity 0.15s ease;
+}
+
+.version-badge:hover {
+  opacity: 1;
+}

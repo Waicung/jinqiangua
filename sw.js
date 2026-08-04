@@ -10,6 +10,7 @@ const STATIC_ASSETS = [
   '/style.css',
   '/app.js',
   '/manifest.json',
+  '/version.json',
   '/icons/icon-192.svg',
   '/icons/icon-512.svg',
   '/data/iching.json',
@@ -50,6 +51,29 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
+
+  // version.json: network-first, so the badge always
+  // reflects the live deployment (cache as offline fallback)
+  const url = new URL(event.request.url);
+  if (url.pathname === '/version.json') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          return response;
+        })
+        .catch(() =>
+          caches.match(event.request).then((cached) =>
+            cached || new Response('{}', {
+              status: 404,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
+        )
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
