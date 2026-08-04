@@ -42,7 +42,6 @@ const state = {
   throws: [],          // [{num, name, yang, moving, symbol}]
   currentThrow: 0,     // 0-5
   animating: false,
-  showAllLines: false,
   // Hexagram data for prompt generation
   primary: null,
   transformed: null,
@@ -140,7 +139,6 @@ function startDivination() {
   state.throws = [];
   state.currentThrow = 0;
   state.animating = false;
-  state.showAllLines = false;
 
   $('throw-count').textContent = '第 1 / 6 次';
   // Reset coins
@@ -288,26 +286,26 @@ function showResult() {
 
   // ── Primary hexagram ──
   container.appendChild(renderHexagramSection(primary, '本卦', primaryLineTypes, movingLines.map(m => m.index)));
+  // 本卦爻辞：六爻爻辞全部显示，动爻高亮标出
+  container.appendChild(renderYaoCiSection(primary, primaryLineTypes, movingLines.map(m => m.index)));
 
   if (movingLines.length > 0) {
     // ── Moving lines ──
     container.appendChild(renderDivider());
-    container.appendChild(renderMovingLinesSection(movingLines, primaryLineTypes));
-
-    // ── Toggle ──
-    container.appendChild(renderToggle());
-
-    // ── All lines (initially hidden) ──
-    const allLinesEl = renderAllLinesSection(primary, primaryLineTypes);
-    allLinesEl.id = 'all-lines-section';
-    allLinesEl.style.display = 'none';
-    container.appendChild(allLinesEl);
+    container.appendChild(renderMovingLinesSection(movingLines, primaryLineTypes, numbers, transformed, transformedLineTypes));
 
     // Arrow
     container.appendChild(renderArrow());
 
     // ── Transformed hexagram ──
     container.appendChild(renderHexagramSection(transformed, '变卦', transformedLineTypes, []));
+
+    // ── 变卦爻辞：默认收起，可展开全部 ──
+    container.appendChild(renderToggle());
+    const allLinesEl = renderAllLinesSection(transformed, transformedLineTypes);
+    allLinesEl.id = 'all-lines-section';
+    allLinesEl.style.display = 'none';
+    container.appendChild(allLinesEl);
   } else {
     // No moving lines → no transformation
     container.appendChild(renderNoChangeNote());
@@ -360,7 +358,36 @@ function renderArrow() {
   return div;
 }
 
-function renderMovingLinesSection(movingLines, lineTypes) {
+function renderYaoCiSection(hexagram, lineTypes, movingIndices) {
+  const section = document.createElement('div');
+  section.className = 'result-section';
+  section.innerHTML = '<h2>📜 本卦爻辞</h2>';
+
+  const list = document.createElement('div');
+  list.className = 'lines-section';
+
+  for (let i = 0; i < 6; i++) {
+    const isYang = lineTypes[i] === 'yang';
+    const symbol = isYang ? '⚊' : '⚋';
+    const pos = posLabel(i, isYang);
+    const text = hexagram.lines[i].text;
+    const isMoving = movingIndices.includes(i);
+    const item = document.createElement('div');
+    item.className = 'line-item' + (isMoving ? ' moving' : '');
+    item.innerHTML = `
+      <span class="line-symbol">${symbol}</span>
+      <span class="line-position">${pos}</span>
+      <span class="line-text">${text}</span>
+      ${isMoving ? '<span class="moving-badge">⚡ 动</span>' : ''}
+    `;
+    list.appendChild(item);
+  }
+
+  section.appendChild(list);
+  return section;
+}
+
+function renderMovingLinesSection(movingLines, lineTypes, numbers, transformed, transformedLineTypes) {
   const section = document.createElement('div');
   section.className = 'result-section';
   section.innerHTML = '<h2>⚡ 动爻</h2>';
@@ -369,14 +396,30 @@ function renderMovingLinesSection(movingLines, lineTypes) {
   list.className = 'lines-section';
 
   movingLines.forEach((ml) => {
-    const isYang = lineTypes[ml.index] === 'yang';
+    const idx = ml.index;
+    const num = numbers[idx];
+    const isYang = lineTypes[idx] === 'yang';
     const symbol = isYang ? '⚊' : '⚋';
+    const change = num === 6 ? '老阴 ⚋→⚊' : '老阳 ⚊→⚋';
+
+    // 变卦中对应的爻
+    const tIsYang = transformedLineTypes[idx] === 'yang';
+    const tSymbol = tIsYang ? '⚊' : '⚋';
+    const tPos = posLabel(idx, tIsYang);
+    const tText = transformed.lines[idx].text;
+
     const item = document.createElement('div');
     item.className = 'line-item moving';
+    // 单行并列展示：本卦爻辞 → 变卦对应爻辞
     item.innerHTML = `
       <span class="line-symbol">${symbol}</span>
       <span class="line-position">${ml.position}</span>
       <span class="line-text">${ml.text}</span>
+      <span class="line-change">${change}</span>
+      <span class="line-arrow">→</span>
+      <span class="line-symbol">${tSymbol}</span>
+      <span class="line-position">${tPos}</span>
+      <span class="line-text">${tText}</span>
     `;
     list.appendChild(item);
   });
@@ -415,7 +458,7 @@ function renderToggle() {
   const container = document.createElement('div');
   container.className = 'toggle-container';
   container.innerHTML = `
-    <span style="font-size:0.75rem;color:var(--text-secondary)">仅动爻</span>
+    <span style="font-size:0.75rem;color:var(--text-secondary)">变卦爻辞</span>
     <button id="toggle-lines-btn" class="toggle-btn">显示全部爻辞</button>
   `;
   return container;
@@ -708,7 +751,7 @@ function setupEvents() {
   $('btn-throw').addEventListener('click', doThrow);
   $('btn-reset').addEventListener('click', startDivination);
 
-  // Toggle: use event delegation since the toggle button is created dynamically
+  // Toggle: 变卦全部爻辞的展开/收起
   document.addEventListener('click', (e) => {
     const toggleBtn = e.target.closest('#toggle-lines-btn');
     if (!toggleBtn) return;

@@ -578,6 +578,37 @@ body {
   color: var(--accent);
 }
 
+/* 动爻：本卦爻 → 变卦爻 单行并列展示 */
+.line-item.moving .line-change {
+  margin-left: 8px;
+}
+.line-item .line-arrow {
+  flex-shrink: 0;
+  margin: 0 8px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* 动爻标记（本卦爻辞中高亮） */
+.line-item .moving-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  color: var(--moving);
+  border: 1px solid var(--moving);
+  border-radius: 10px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+/* 动爻变化类型（老阴/老阳） */
+.line-item .line-change {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 /* Divider */
 .divider {
   width: 100%;
