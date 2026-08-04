@@ -1,0 +1,18 @@
+# Dev / tooling files that should not be deployed as site assets
+.git/
+.wrangler/
+node_modules/
+scripts/
+zhouyi/
+bun.lock
+package.json
+package-lock.json
+tsconfig.json
+wrangler.jsonc
+README.md
+CONTEXT.md
+CLAUDE.md
+default.md
+skills-lock.json
+.assetsignore
+.gitignore

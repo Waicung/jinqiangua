@@ -1,0 +1,14 @@
+{
+  "name": "jinqiangua",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "wrangler": "^4.118.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
