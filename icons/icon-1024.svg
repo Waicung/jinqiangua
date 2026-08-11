@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#fafaf9" rx="128"/>
+  <!-- Six hexagram lines scaled up -->
+  <rect x="192" y="792" width="640" height="40" rx="20" fill="#1c1917"/>
+  <rect x="192" y="664" width="640" height="40" rx="20" fill="#78716c"/>
+  <rect x="192" y="536" width="640" height="40" rx="20" fill="#78716c"/>
+  <rect x="192" y="408" width="640" height="40" rx="20" fill="#78716c"/>
+  <rect x="192" y="280" width="640" height="40" rx="20" fill="#1c1917"/>
+  <rect x="192" y="152" width="640" height="40" rx="20" fill="#1c1917"/>
+</svg>

@@ -1,7 +1,7 @@
 {
   "name": "周易起卦",
-  "short_name": "周易",
-  "description": "离线可用的金钱卦起卦网页应用。三枚硬币，六爻成卦。",
+  "short_name": "周易起卦",
+  "description": "离线可用的金钱卦起卦应用。三枚硬币，六爻成卦。",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#fafaf9",
@@ -18,6 +18,46 @@
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-1024.svg",
+      "sizes": "1024x1024",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshot.png",
+      "sizes": "402x869",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "周易起卦主界面"
+    }
+  ],
+  "id": "com.waicung.jinqiangua",
+  "dir": "ltr",
+  "lang": "zh",
+  "orientation": "portrait",
+  "categories": [
+    "lifestyle"
   ]
 }

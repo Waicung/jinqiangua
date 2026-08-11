@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "net.waicung.jinqiangua",
+        "sha256_cert_fingerprints": ["80:D0:19:E0:F3:1C:2D:13:EF:E2:7B:A8:61:74:8A:D5:66:91:73:8A:18:CB:F8:FB:B5:8E:19:FE:4B:06:A7:C7"]
+      }
+    }]
