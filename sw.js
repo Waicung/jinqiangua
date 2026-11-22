@@ -2,7 +2,7 @@
    周易起卦 — Service Worker (Cache-First)
    ====================================================== */
 
-const CACHE_NAME = 'jinqiangua-v5';
+const CACHE_NAME = 'jinqiangua-v6';
 
 const STATIC_ASSETS = [
   '/',

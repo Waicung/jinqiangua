@@ -50,6 +50,9 @@ const state = {
   primaryLineTypes: [],
   transformedLineTypes: [],
   geminiAvailable: true,
+  // 当前这次起卦的本地记录（会话）
+  session: null,
+  feedbackOpen: false,
 };
 
 // ── 4.5. Gemini connectivity check ────────────────────
@@ -255,15 +258,13 @@ function addBuildLine(index, info) {
 }
 
 // ── 9. Result rendering ──────────────────────────────
-function showResult() {
-  const numbers = state.throws.map((t) => t.num);
+// 从六个和值算出完整卦象资料（本卦 / 变卦 / 动爻 / 爻性）
+function computeReading(numbers) {
   const binary = numbers.map((n) => (n === 7 || n === 9 ? '1' : '0')).join('');
-
   const primary = getPrimaryHexagram(binary);
   const transformed = getTransformedHexagram(numbers);
   const movingLines = getMovingLines(primary, numbers);
 
-  // Compute line types for both hexagrams
   const primaryLineTypes = numbers.map((n) => (n === 7 || n === 9 ? 'yang' : 'yin'));
   const transformedBits = binary.split('').map((bit, i) => {
     if (numbers[i] === 6) return '1';
@@ -272,35 +273,58 @@ function showResult() {
   });
   const transformedLineTypes = transformedBits.map((b) => (b === '1' ? 'yang' : 'yin'));
 
-  // Store hexagram data in state for prompt generation
-  state.primary = primary;
-  state.transformed = transformed;
-  state.movingLines = movingLines;
-  state.numbers = numbers;
-  state.primaryLineTypes = primaryLineTypes;
-  state.transformedLineTypes = transformedLineTypes;
+  return { numbers, binary, primary, transformed, movingLines, primaryLineTypes, transformedLineTypes };
+}
 
-  // 新一次起卦重新开始对话
+// options.session：回看一条本地记录；不传则新建一次起卦记录
+function showResult(options = {}) {
+  const existing = options.session || null;
+  const numbers = existing ? existing.numbers.slice() : state.throws.map((t) => t.num);
+  const reading = computeReading(numbers);
+
+  // Store hexagram data in state for prompt generation
+  state.throws = numbers.map((n) => ({ num: n, ...LINE_INFO[n] }));
+  state.primary = reading.primary;
+  state.transformed = reading.transformed;
+  state.movingLines = reading.movingLines;
+  state.numbers = numbers;
+  state.primaryLineTypes = reading.primaryLineTypes;
+  state.transformedLineTypes = reading.transformedLineTypes;
+
+  // 每次起卦都落成本地会话记录；回看旧记录时沿用原记录
+  const session = existing || createSession(numbers, reading, !options.ephemeral);
+  state.session = session;
+  state.feedbackOpen = false;
+
+  // 新结果从会话恢复对话
   resetChat();
+  chatState.previousInteractionId = session.previousInteractionId || '';
+  chatState.transport = session.transport || 'interactions';
 
   // Build result HTML
   const container = $('result-content');
   container.innerHTML = '';
-  const movingIndices = movingLines.map((m) => m.index);
+  const movingIndices = reading.movingLines.map((m) => m.index);
 
-  // ── 本卦概览 ──
-  container.appendChild(renderHero(primary, '本卦', primaryLineTypes, movingIndices, { jump: true }));
+  // ── 本卦 ──
+  container.appendChild(renderHexagramSection(reading.primary, '本卦', reading.primaryLineTypes, movingIndices));
+  // 本卦爻辞：六爻爻辞全部显示，动爻高亮标出
+  container.appendChild(renderYaoCiSection(reading.primary, reading.primaryLineTypes, movingIndices));
 
-  if (movingLines.length > 0) {
-    // ── 动爻：本卦 → 变卦 的对应关系 ──
-    container.appendChild(renderMovingCard(movingLines, numbers, transformed, transformedLineTypes));
+  if (reading.movingLines.length > 0) {
+    // ── 动爻 ──
+    container.appendChild(renderDivider());
+    container.appendChild(renderMovingLinesSection(reading.movingLines, reading.primaryLineTypes, numbers, reading.transformed, reading.transformedLineTypes));
 
-    // ── 变卦概览 ──
-    container.appendChild(renderHero(transformed, '变卦', transformedLineTypes, []));
+    // 箭头
+    container.appendChild(renderArrow());
+
+    // ── 变卦 ──
+    container.appendChild(renderHexagramSection(reading.transformed, '变卦', reading.transformedLineTypes, []));
 
     // ── 变卦爻辞：默认收起，可展开全部 ──
     container.appendChild(renderToggle());
-    const allLinesEl = renderLineFeed(transformed, transformedLineTypes, [], '变卦爻辞');
+    const allLinesEl = renderAllLinesSection(reading.transformed, reading.transformedLineTypes);
     allLinesEl.id = 'all-lines-section';
     allLinesEl.style.display = 'none';
     container.appendChild(allLinesEl);
@@ -308,10 +332,9 @@ function showResult() {
     container.appendChild(renderNoChangeNote());
   }
 
-  // ── 本卦爻辞：六爻全部显示，动爻高亮 ──
-  container.appendChild(renderLineFeed(primary, primaryLineTypes, movingIndices, '本卦爻辞'));
-
-  // ── 解卦对话 ──
+  // ── AI prompt section ──
+  container.appendChild(renderPromptSection());
+  // ── 在应用中与 Gemini 对话（用户自带 Key） ──
   container.appendChild(renderChatSection());
 
   // 新结果：收起上一次的复制提示 toast
@@ -323,112 +346,138 @@ function showResult() {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// 卦象概览卡：符号 + 卦名 + 六爻 + 卦辞
-function renderHero(hexagram, label, lineTypes, movingIndices, options = {}) {
-  const section = document.createElement('section');
-  section.className = 'result-hero' + (label === '变卦' ? ' is-transformed' : '');
-  const tri = trigramInfo(hexagram.binary);
+function renderHexagramSection(hexagram, label, lineTypes, movingIndices) {
+  const section = document.createElement('div');
+  section.className = 'result-section';
 
   let linesHtml = '';
-  // 上爻在上：从 index 5 往下画
-  for (let i = 5; i >= 0; i--) {
-    const isYang = lineTypes[i] === 'yang';
+  for (let i = 0; i < 6; i++) {
     const isMoving = movingIndices.includes(i);
-    linesHtml += `
-      <div class="hero-line ${isYang ? 'yang' : 'yin'}${isMoving ? ' moving' : ''}">
-        <span class="hero-pos">${posLabel(i, isYang)}</span>
-        <span class="hero-bar"></span>
+    const isYang = lineTypes[i] === 'yang';
+    const pos = posLabel(i, isYang);
+    const yangClass = isYang ? 'yang' : 'yin';
+    const movingClass = isMoving ? 'moving' : '';
+    linesHtml +=
+      `<div class="hexagram-line ${yangClass} ${movingClass}">
+        <span class="line-visual"></span>
+        <span class="line-label">${pos}</span>
       </div>`;
   }
 
   section.innerHTML = `
-    <div class="hero-top">
-      <span class="hero-badge">${label}</span>
-      <span class="hero-id">第 ${hexagram.id} 卦</span>
-    </div>
-    <div class="hero-main">
-      <div class="hero-glyph">${hexagram.symbol}</div>
-      <div class="hero-info">
-        <div class="hero-name">${hexagram.name}</div>
-        <div class="hero-trigrams">${tri.upperSymbol} ${tri.upperName} · ${tri.lowerSymbol} ${tri.lowerName}</div>
-      </div>
-    </div>
-    <div class="hero-lines">${linesHtml}</div>
-    <div class="hero-judgment">${hexagram.judgment}</div>
-    ${options.jump ? '<button class="hero-jump" data-scroll="chat-panel">带着卦象去解卦 ↓</button>' : ''}
+    <div class="hexagram-name">${hexagram.symbol} ${hexagram.name}</div>
+    <div class="hexagram-display">${linesHtml}</div>
+    <div class="judgment">${hexagram.judgment}</div>
   `;
+
   return section;
 }
 
-// 爻辞列表：每条一个卡片，动爻高亮
-function renderLineFeed(hexagram, lineTypes, movingIndices, title) {
-  const section = document.createElement('section');
-  section.className = 'result-feed';
+function renderDivider() {
+  const div = document.createElement('div');
+  div.className = 'divider';
+  return div;
+}
 
-  let cards = '';
+function renderArrow() {
+  const div = document.createElement('div');
+  div.className = 'arrow-down';
+  div.textContent = '↓';
+  return div;
+}
+
+function renderYaoCiSection(hexagram, lineTypes, movingIndices) {
+  const section = document.createElement('div');
+  section.className = 'result-section';
+  section.innerHTML = '<h2>📜 本卦爻辞</h2>';
+
+  const list = document.createElement('div');
+  list.className = 'lines-section';
+
   for (let i = 0; i < 6; i++) {
     const isYang = lineTypes[i] === 'yang';
+    const symbol = isYang ? '⚊' : '⚋';
+    const pos = posLabel(i, isYang);
+    const text = hexagram.lines[i].text;
     const isMoving = movingIndices.includes(i);
-    cards += `
-      <article class="line-card${isMoving ? ' moving' : ''}">
-        <div class="lc-head">
-          <span class="lc-bar ${isYang ? 'yang' : 'yin'}"></span>
-          <span class="lc-pos">${posLabel(i, isYang)}</span>
-          ${isMoving ? '<span class="lc-badge">⚡ 动爻</span>' : ''}
-        </div>
-        <p class="lc-text">${hexagram.lines[i].text}</p>
-      </article>`;
+    const item = document.createElement('div');
+    item.className = 'line-item' + (isMoving ? ' moving' : '');
+    item.innerHTML = `
+      <span class="line-symbol">${symbol}</span>
+      <span class="line-position">${pos}</span>
+      <span class="line-text">${text}</span>
+      ${isMoving ? '<span class="moving-badge">⚡ 动</span>' : ''}
+    `;
+    list.appendChild(item);
   }
 
-  section.innerHTML = `
-    <div class="feed-head">
-      <span class="feed-title">${title}</span>
-      ${movingIndices.length ? `<span class="feed-sub">${movingIndices.length} 爻动</span>` : ''}
-    </div>
-    <div class="line-list">${cards}</div>
-  `;
+  section.appendChild(list);
   return section;
 }
 
-// 动爻卡：本卦爻辞 → 变卦对应爻辞（上下排列，不再挤在一行）
-function renderMovingCard(movingLines, numbers, transformed, transformedLineTypes) {
-  const section = document.createElement('section');
-  section.className = 'moving-card';
+function renderMovingLinesSection(movingLines, lineTypes, numbers, transformed, transformedLineTypes) {
+  const section = document.createElement('div');
+  section.className = 'result-section';
+  section.innerHTML = '<h2>⚡ 动爻</h2>';
 
-  const items = movingLines.map((ml) => {
+  const list = document.createElement('div');
+  list.className = 'lines-section';
+
+  movingLines.forEach((ml) => {
     const idx = ml.index;
     const num = numbers[idx];
+    const isYang = lineTypes[idx] === 'yang';
+    const symbol = isYang ? '⚊' : '⚋';
+    const change = num === 6 ? '老阴 ⚋→⚊' : '老阳 ⚊→⚋';
+
+    // 变卦中对应的爻
     const tIsYang = transformedLineTypes[idx] === 'yang';
-    const change = num === 6
-      ? { label: '老阴', arrow: '⚋ → ⚊' }
-      : { label: '老阳', arrow: '⚊ → ⚋' };
+    const tSymbol = tIsYang ? '⚊' : '⚋';
+    const tPos = posLabel(idx, tIsYang);
+    const tText = transformed.lines[idx].text;
 
-    return `
-      <div class="mc-item">
-        <div class="mc-side">
-          <span class="mc-tag">本卦</span>
-          <span class="mc-pos">${ml.position}</span>
-          <p class="mc-text">${ml.text}</p>
-        </div>
-        <div class="mc-shift">
-          <span class="mc-shift-label">${change.label}</span>
-          <span class="mc-shift-icon">${change.arrow}</span>
-        </div>
-        <div class="mc-side">
-          <span class="mc-tag alt">变卦</span>
-          <span class="mc-pos">${posLabel(idx, tIsYang)}</span>
-          <p class="mc-text">${transformed.lines[idx].text}</p>
-        </div>
-      </div>`;
-  }).join('');
+    const item = document.createElement('div');
+    item.className = 'line-item moving';
+    item.innerHTML = `
+      <span class="line-symbol">${symbol}</span>
+      <span class="line-position">${ml.position}</span>
+      <span class="line-text">${ml.text}</span>
+      <span class="line-change">${change}</span>
+      <span class="line-arrow">→</span>
+      <span class="line-symbol">${tSymbol}</span>
+      <span class="line-position">${tPos}</span>
+      <span class="line-text">${tText}</span>
+    `;
+    list.appendChild(item);
+  });
 
-  section.innerHTML = `
-    <div class="mc-head">
-      <span class="mc-title">⚡ 动爻</span>
-      <span class="mc-sub">${movingLines.length} 爻变化</span>
-    </div>
-    ${items}
-  `;
+  section.appendChild(list);
+  return section;
+}
+
+function renderAllLinesSection(hexagram, lineTypes) {
+  const section = document.createElement('div');
+  section.className = 'result-section';
+
+  const list = document.createElement('div');
+  list.className = 'lines-section';
+
+  for (let i = 0; i < 6; i++) {
+    const isYang = lineTypes[i] === 'yang';
+    const symbol = isYang ? '⚊' : '⚋';
+    const pos = posLabel(i, isYang);
+    const text = hexagram.lines[i].text;
+    const item = document.createElement('div');
+    item.className = 'line-item';
+    item.innerHTML = `
+      <span class="line-symbol">${symbol}</span>
+      <span class="line-position">${pos}</span>
+      <span class="line-text">${text}</span>
+    `;
+    list.appendChild(item);
+  }
+
+  section.appendChild(list);
   return section;
 }
 
@@ -436,28 +485,41 @@ function renderToggle() {
   const container = document.createElement('div');
   container.className = 'toggle-container';
   container.innerHTML = `
-    <button id="toggle-lines-btn" class="toggle-btn" aria-expanded="false">
-      <span>变卦六爻爻辞</span><span class="toggle-chevron">⌄</span>
-    </button>
+    <span style="font-size:0.75rem;color:var(--text-secondary)">变卦爻辞</span>
+    <button id="toggle-lines-btn" class="toggle-btn">显示全部爻辞</button>
   `;
   return container;
 }
 
 function renderNoChangeNote() {
   const div = document.createElement('div');
-  div.className = 'static-note';
-  div.innerHTML = '本次起卦无动爻，为<strong>静卦</strong>，以本卦卦辞为占。';
+  div.className = 'result-section';
+  div.innerHTML = `
+    <div class="judgment" style="text-align:center;border-style:dashed;">
+      本次起卦无动爻，静卦以本卦卦辞为占。
+    </div>
+  `;
   return div;
 }
 
 // ── 10. AI Prompt ─────────────────────────────────────
 function updateShareButtonUI() {
   const btn = document.getElementById('btn-share-ai');
+  const desc = document.querySelector('.prompt-desc');
   if (!btn) return; // 还未渲染，跳过
-  btn.textContent = state.geminiAvailable ? '打开 Gemini ↗' : '打开豆包 ↗';
+
+  if (state.geminiAvailable) {
+    btn.textContent = '🚀 在 Gemini 中打开';
+    if (desc) desc.innerHTML = '输入你的问题，一键生成结构化解卦 prompt。复制后可直接在 <strong>Gemini</strong> 中打开。';
+  } else {
+    btn.textContent = '📋 复制到豆包';
+    if (desc) desc.innerHTML = '输入你的问题，一键生成结构化解卦 prompt。复制后可直接打开 <strong>豆包</strong>。';
+  }
 }
 
 function currentQuestion() {
+  const promptInput = $('prompt-question');
+  if (promptInput && promptInput.value.trim()) return promptInput.value.trim();
   const input = $('chat-input');
   const typed = input ? input.value.trim() : '';
   if (typed) return typed;
@@ -478,6 +540,38 @@ function showToast(message) {
   toast.classList.add('show');
   clearTimeout(showToast._timer);
   showToast._timer = setTimeout(() => toast.classList.remove('show'), 2200);
+}
+
+// 有效期截止后，所有“继续解卦”的入口都走这里拦下
+function blockedByExpiry() {
+  if (!isSessionExpired(state.session)) return false;
+  updateChatValidityUI();
+  showToast('本次交流已截止，只能记录反馈');
+  return true;
+}
+
+function renderPromptSection() {
+  const section = document.createElement('div');
+  section.className = 'result-section prompt-section';
+  section.id = 'prompt-section';
+  section.innerHTML = `
+    <h2>🤖 AI 解卦提示</h2>
+    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt。复制后可直接在 <strong>Gemini</strong> 中打开。</p>
+    <textarea id="prompt-question" class="prompt-input" rows="2" placeholder="输入你想问的问题（选填）…"></textarea>
+    <button id="btn-gen-prompt" class="btn-secondary prompt-btn">生成解卦提示</button>
+    <div id="prompt-output" class="prompt-output" style="display:none;">
+      <div class="prompt-label">📋 解卦 Prompt</div>
+      <pre id="prompt-text" class="prompt-text"></pre>
+      <div class="prompt-actions">
+        <button id="btn-copy-prompt" class="btn-secondary prompt-btn">📋 复制</button>
+        <button id="btn-share-ai" class="btn-primary prompt-btn">🚀 在 Gemini 中打开</button>
+      </div>
+      <span id="copy-feedback" class="copy-feedback"></span>
+    </div>
+  `;
+  // DOM 创建后立即根据当前检测状态更新按钮文案
+  setTimeout(() => updateShareButtonUI(), 0);
+  return section;
 }
 
 function trigramInfo(binary) {
@@ -586,25 +680,34 @@ ${question}
 }
 
 async function generatePrompt() {
+  if (blockedByExpiry()) return '';
   const text = buildPromptText(currentQuestion());
   $('prompt-text').textContent = text;
-  $('prompt-output').hidden = false;
-  await copyText(text);
-  showToast('解卦提示已复制，粘贴给任意 AI 即可');
-  const out = $('prompt-output');
-  if (out) out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  $('prompt-output').style.display = 'block';
+  const feedback = $('copy-feedback');
+  if (feedback) feedback.textContent = '';
   return text;
 }
 
 async function copyPrompt() {
+  if (blockedByExpiry()) return;
   const text = $('prompt-text').textContent;
   if (!text) return;
   await copyText(text);
-  showToast('已复制');
+  const feedback = $('copy-feedback');
+  if (feedback) {
+    feedback.textContent = '✅ 已复制！';
+    setTimeout(() => { feedback.textContent = ''; }, 2000);
+  }
 }
 
 async function shareToGemini() {
-  const text = await generatePrompt();
+  if (blockedByExpiry()) return;
+  const text = $('prompt-text').textContent;
+  if (!text) return;
+
+  // First ensure clipboard has the text
+  await copyText(text);
 
   // Try native share — surfaces installed apps (Gemini, Claude, ChatGPT, etc.)
   if (navigator.share) {
@@ -657,6 +760,12 @@ const GEMINI_KEY_STORAGE = 'gemini_api_key';
 const GEMINI_MODEL_STORAGE = 'gemini_model';
 const CHAT_TIMEOUT_MS = 60000;
 
+// 占卦为一时之像：每次起卦只保留一段固定的解卦交流窗口。
+// 窗口结束后只能补记「反馈」，不再继续解卦问答，也不再发送到模型。
+const CHAT_VALID_MS = 24 * 60 * 60 * 1000; // 24 小时
+const SESSIONS_KEY = 'iching_sessions_v1';
+const SESSION_MAX = 100;
+
 const chatState = {
   history: [],        // [{ role: 'user' | 'model', text }]，回退到 generateContent 时重放
   system: '',
@@ -664,6 +773,100 @@ const chatState = {
   transport: 'interactions', // 记住当前可用的传输层
   previousInteractionId: '',  // Interactions API 的会话句柄
 };
+
+// ── 10.6.1 本地会话记录 ─────────────────────────────
+// 每条记录 = 一次起卦 + 该次解卦对话 + 反馈。全部存 localStorage，
+// 不上传服务器（对话内容除外：调用 Gemini 时本就会发出）。
+function loadSessions() {
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    if (!Array.isArray(list)) return [];
+    return list.filter((s) =>
+      s && typeof s.id === 'string' &&
+      Number.isFinite(s.createdAt) &&
+      Array.isArray(s.numbers) && s.numbers.length === 6 &&
+      s.numbers.every((n) => n >= 6 && n <= 9) &&
+      Array.isArray(s.messages)
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeSessions(list) {
+  try {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(list));
+  } catch {
+    // 隐私模式 / 配额满：记录功能静默降级，不影响起卦
+  }
+}
+
+function saveSession(session) {
+  if (!session || !session.id) return;
+  const list = loadSessions();
+  const idx = list.findIndex((s) => s.id === session.id);
+  if (idx >= 0) list[idx] = session;
+  else list.push(session);
+  list.sort((a, b) => b.createdAt - a.createdAt);
+  writeSessions(list.slice(0, SESSION_MAX));
+}
+
+function createSession(numbers, reading, persist = true) {
+  const createdAt = Date.now();
+  const session = {
+    id: `s_${createdAt.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    createdAt,
+    expiresAt: createdAt + CHAT_VALID_MS,
+    numbers: numbers.slice(),
+    primaryId: reading.primary.id,
+    transformedId: reading.transformed.id,
+    movingIndices: reading.movingLines.map((m) => m.index),
+    messages: [],
+    previousInteractionId: '',
+    transport: 'interactions',
+  };
+  if (persist) saveSession(session);
+  else session.ephemeral = true;
+  return session;
+}
+
+function getSessionById(id) {
+  return loadSessions().find((s) => s.id === id) || null;
+}
+
+function isSessionExpired(session) {
+  return !!session && Date.now() >= (session.expiresAt || 0);
+}
+
+function formatClock(ts) {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function formatDateTime(ts) {
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${formatClock(ts)}`;
+}
+
+function formatRemaining(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h} 小时 ${String(m).padStart(2, '0')} 分`;
+  return `${m} 分 ${String(s).padStart(2, '0')} 秒`;
+}
+
+// 把一条消息追加进当前本地记录（intro / 问答 / 反馈）
+function persistMessage(role, text, kind) {
+  const session = state.session;
+  if (!session || session.ephemeral) return;
+  session.messages.push({ role, text, at: Date.now(), ...(kind ? { kind } : {}) });
+  saveSession(session);
+}
+
 
 function getGeminiKey() {
   try {
@@ -709,6 +912,46 @@ function resetChat() {
   chatState.system = '';
   chatState.busy = false;
   chatState.previousInteractionId = '';
+  chatState.transport = 'interactions';
+}
+
+// 从本地记录恢复对话气泡（不再重新写入 localStorage）
+function restoreChatLog() {
+  const log = $('chat-log');
+  if (!log) return;
+
+  const session = state.session;
+  log.innerHTML = '';
+  chatState.history = [];
+
+  const messages = (session && session.messages) || [];
+  if (!messages.length) {
+    renderChatIntro();
+    return;
+  }
+
+  for (const m of messages) {
+    appendChatMessage(m.role, m.text, { persist: false, kind: m.kind });
+    // intro 只是开场摘要，不属于 API 上下文
+    if (!m.kind && (m.role === 'user' || m.role === 'model')) {
+      chatState.history.push({ role: m.role, text: m.text });
+    }
+  }
+
+  const wrap = $('chat-chips');
+  if (wrap) {
+    const hasTalked = chatState.history.some((m) => m.role === 'user');
+    if (hasTalked || isSessionExpired(session)) {
+      wrap.style.display = 'none';
+    } else {
+      wrap.style.display = '';
+      wrap.innerHTML = buildQuickChips()
+        .map((q) => `<button type="button" class="chat-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
+        .join('');
+    }
+  }
+
+  updateChatValidityUI();
 }
 
 function escapeHtml(str) {
@@ -726,23 +969,24 @@ function formatChatText(text) {
 }
 
 function renderChatSection() {
-  const section = document.createElement('section');
-  section.className = 'chat-panel';
+  const section = document.createElement('div');
+  section.className = 'result-section chat-section';
   section.id = 'chat-panel';
   section.innerHTML = `
-    <div class="chat-header">
-      <div class="chat-avatar">☯</div>
-      <div class="chat-head-text">
-        <div class="chat-title">解卦 <span class="chat-live">AI</span></div>
-        <div id="chat-key-status" class="chat-sub"></div>
-      </div>
-      <button id="btn-chat-settings" class="chat-icon-btn" title="Gemini 设置" aria-label="Gemini 设置">⚙</button>
+    <h2>💬 在应用中对话（Gemini）</h2>
+    <p class="chat-desc">使用你自己的 Gemini API Key，在本地直接与模型多轮对话。Key 仅保存在本机浏览器，不会上传到任何服务器。可在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免费获取。</p>
+
+    <div id="chat-validity" class="chat-validity"></div>
+
+    <div id="chat-expired" class="chat-expired" hidden>
+      <div class="ce-title">解卦交流已截止</div>
+      <p class="ce-text">占卦为一时之像，本次卦象的解读到 <span id="chat-expired-at"></span> 为止。此后只能记录反馈，不再解卦。</p>
     </div>
 
-    <div id="chat-settings" class="chat-settings" hidden>
+    <div id="chat-key-row" class="chat-settings">
       <label class="chat-field">
-        <span class="chat-field-label">Gemini API Key</span>
-        <input id="gemini-key" type="password" class="prompt-input" placeholder="粘贴 Key（留空则保留已存的）" autocomplete="off" spellcheck="false">
+        <span class="chat-field-label">API Key</span>
+        <input id="gemini-key" type="password" class="prompt-input" placeholder="粘贴 Gemini API Key（留空则保留已存 Key）" autocomplete="off" spellcheck="false">
       </label>
       <label class="chat-field">
         <span class="chat-field-label">模型</span>
@@ -755,43 +999,40 @@ function renderChatSection() {
       <p class="chat-hint">Key 只保存在本机浏览器 · <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">去 AI Studio 免费获取</a></p>
     </div>
 
+    <p id="chat-key-status" class="chat-status"></p>
     <div id="chat-log" class="chat-log"></div>
     <div id="chat-chips" class="chat-chips"></div>
+    <textarea id="chat-input" class="prompt-input" rows="2" placeholder="例如：请解读本次卦象，重点看动爻提示我该注意什么？"></textarea>
+    <button id="btn-chat-send" class="btn-primary prompt-btn">发送</button>
 
-    <form id="chat-composer" class="chat-composer" autocomplete="off">
-      <textarea id="chat-input" class="chat-input" rows="1" enterkeyhint="send" placeholder="问问这次卦象…"></textarea>
-      <button id="btn-chat-send" class="chat-send" type="submit" title="发送" aria-label="发送">↑</button>
-    </form>
-
-    <div class="chat-footer">
-      <button id="btn-gen-prompt" class="chat-text-btn">复制解卦提示</button>
-      <button id="btn-share-ai" class="chat-text-btn">打开 Gemini ↗</button>
+    <div id="chat-feedback" class="chat-feedback" hidden>
+      <div class="feedback-head">
+        <span class="feedback-title">反馈</span>
+        <span class="feedback-sub">只存档，不再解卦</span>
+      </div>
+      <textarea id="feedback-input" class="prompt-input feedback-input" rows="2" placeholder="事情后来如何？记下来，日后回看…" enterkeyhint="done"></textarea>
+      <div class="feedback-actions">
+        <button id="btn-feedback-save" class="btn-secondary chat-mini-btn" type="button">记录反馈</button>
+      </div>
     </div>
 
-    <div id="prompt-output" class="chat-prompt" hidden>
-      <pre id="prompt-text" class="prompt-text"></pre>
-      <div class="prompt-actions">
-        <button id="btn-copy-prompt" class="btn-secondary prompt-btn">📋 再复制一次</button>
-      </div>
+    <div class="chat-foot-row">
+      <button id="btn-add-feedback" class="chat-foot-link">记录反馈</button>
     </div>
   `;
   setTimeout(() => {
     updateChatKeyUI();
-    renderChatIntro();
+    restoreChatLog();
+    updateChatValidityUI();
     updateShareButtonUI();
-    syncSendButton();
   }, 0);
   return section;
 }
 
-function openChatSettings() {
-  const panel = $('chat-settings');
-  if (panel) panel.hidden = false;
-  const input = $('gemini-key');
-  if (input && !getGeminiKey()) setTimeout(() => input.focus(), 60);
-}
-
 function updateChatKeyUI() {
+  const row = $('chat-key-row');
+  if (!row) return;
+
   const modelInput = $('gemini-model');
   // 每次重建都回填当前设置（不渲染 Key 本身）
   if (modelInput && !modelInput.matches(':focus')) modelInput.value = getGeminiModel();
@@ -799,14 +1040,23 @@ function updateChatKeyUI() {
   const status = $('chat-key-status');
   const key = getGeminiKey();
 
-  if (status) {
-    status.innerHTML = key
-      ? `<span class="status-dot online"></span> 已连接 · …${escapeHtml(key.slice(-4))} · ${escapeHtml(getGeminiModel())}`
-      : '<span class="status-dot"></span> 未配置 Key · 也能复制提示去外部 AI';
+  if (isSessionExpired(state.session)) {
+    row.style.display = 'none';
+    if (status) status.textContent = '';
+    return;
   }
 
-  const clearBtn = $('btn-clear-key');
-  if (clearBtn) clearBtn.hidden = !key;
+  if (key) {
+    row.style.display = 'none';
+    if (status) {
+      status.innerHTML =
+        `🔑 已保存本机 Key（…${escapeHtml(key.slice(-4))}） · 模型 ${escapeHtml(getGeminiModel())} ` +
+        `<button id="btn-change-key" class="chat-link">更换 / 清除</button>`;
+    }
+  } else {
+    row.style.display = 'flex';
+    if (status) status.textContent = '尚未保存 Key：对话功能不可用，但「生成解卦提示」与复制功能照常使用。';
+  }
 }
 
 function saveKeyFromInput() {
@@ -820,25 +1070,32 @@ function saveKeyFromInput() {
   setGeminiModel(modelInput.value);
   keyInput.value = '';
 
-  // Key / 模型变更后重新开始对话
-  resetChat();
-  const log = $('chat-log');
-  if (log) log.innerHTML = '';
+  // Key / 模型变更后只重置服务端会话句柄，本地记录与对话保留
+  chatState.previousInteractionId = '';
+  chatState.transport = 'interactions';
+  if (state.session && !state.session.ephemeral) {
+    state.session.previousInteractionId = '';
+    state.session.transport = 'interactions';
+    saveSession(state.session);
+  }
   updateChatKeyUI();
-  renderChatIntro();
-
-  const panel = $('chat-settings');
-  if (panel) panel.hidden = true;
+  restoreChatLog();
   showToast('Gemini 设置已保存');
 }
 
 function clearGeminiKey() {
   setGeminiKey('');
-  resetChat();
-  const log = $('chat-log');
-  if (log) log.innerHTML = '';
+  const keyInput = $('gemini-key');
+  if (keyInput) keyInput.value = '';
+  chatState.previousInteractionId = '';
+  chatState.transport = 'interactions';
+  if (state.session && !state.session.ephemeral) {
+    state.session.previousInteractionId = '';
+    state.session.transport = 'interactions';
+    saveSession(state.session);
+  }
   updateChatKeyUI();
-  renderChatIntro();
+  restoreChatLog();
   showToast('已清除本机 Key');
 }
 
@@ -866,11 +1123,18 @@ function renderChatIntro() {
   } else {
     text += '\n\n六爻皆静，以本卦卦辞为占。';
   }
+  if (state.session) {
+    text += `\n\n解卦交流 ${Math.round(CHAT_VALID_MS / 3600000)} 小时内有效，至 ${formatDateTime(state.session.expiresAt)}。`;
+  }
   text += '\n\n想从哪里聊起？可以直接问我。';
-  appendChatMessage('model', text);
+  appendChatMessage('model', text, { persist: true, kind: 'intro' });
 
   const wrap = $('chat-chips');
   if (wrap) {
+    if (isSessionExpired(state.session)) {
+      wrap.style.display = 'none';
+      return;
+    }
     wrap.style.display = '';
     wrap.innerHTML = buildQuickChips()
       .map((q) => `<button type="button" class="chat-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
@@ -878,44 +1142,28 @@ function renderChatIntro() {
   }
 }
 
-function scrollChatToEnd() {
-  const log = $('chat-log');
-  if (log) log.scrollTop = log.scrollHeight;
-}
-
-function appendChatMessage(role, text) {
+function appendChatMessage(role, text, options = {}) {
   const log = $('chat-log');
   if (!log) return null;
-  const row = document.createElement('div');
+  const el = document.createElement('div');
+  el.className = `chat-msg ${role}`;
 
-  if (role === 'user') {
-    row.className = 'chat-row user';
-    row.innerHTML = `<div class="chat-bubble">${formatChatText(text)}</div>`;
-  } else if (role === 'error') {
-    row.className = 'chat-row model';
-    row.innerHTML = `<div class="chat-avatar sm warn">!</div><div class="chat-bubble error">${formatChatText(text)}</div>`;
-  } else if (role === 'system') {
-    row.className = 'chat-system';
-    row.innerHTML = `<div class="chat-bubble system">${formatChatText(text)}</div>`;
+  if (role === 'feedback') {
+    el.innerHTML = `<span class="feedback-tag">反馈</span>${formatChatText(text)}`;
   } else {
-    row.className = 'chat-row model';
-    row.innerHTML = `<div class="chat-avatar sm">☯</div><div class="chat-bubble">${formatChatText(text)}</div>`;
+    el.innerHTML = formatChatText(text);
   }
 
-  log.appendChild(row);
-  scrollChatToEnd();
-  return row;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+
+  // 只在真正产生内容时落盘；重建历史时传 persist:false
+  if (options.persist) persistMessage(role, text, options.kind);
+  return el;
 }
 
 function appendTyping() {
-  const log = $('chat-log');
-  if (!log) return null;
-  const row = document.createElement('div');
-  row.className = 'chat-row model chat-typing-row';
-  row.innerHTML = `<div class="chat-avatar sm">☯</div><div class="chat-bubble typing"><span></span><span></span><span></span></div>`;
-  log.appendChild(row);
-  scrollChatToEnd();
-  return row;
+  return appendChatMessage('pending', '思考中…');
 }
 
 function autoGrow(el) {
@@ -924,11 +1172,84 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
 
-function syncSendButton() {
-  const btn = $('btn-chat-send');
-  const input = $('chat-input');
-  if (!btn || !input) return;
-  btn.disabled = chatState.busy || !input.value.trim();
+// 有效期状态：剩余时间、截止后的锁屏与反馈入口
+function updateChatValidityUI() {
+  const session = state.session;
+  if (!session || !$('chat-panel')) return;
+
+  const expired = isSessionExpired(session);
+
+  const strip = $('chat-validity');
+  if (strip) {
+    strip.classList.toggle('is-expired', expired);
+    strip.innerHTML = expired
+      ? `<span class="validity-dot"></span>本次解卦交流已于 ${escapeHtml(formatDateTime(session.expiresAt))} 截止`
+      : `<span class="validity-dot"></span>解卦交流有效期 · 剩余 ${escapeHtml(formatRemaining(session.expiresAt - Date.now()))}（至 ${escapeHtml(formatDateTime(session.expiresAt))}）`;
+  }
+
+  const notice = $('chat-expired');
+  if (notice) notice.hidden = !expired;
+  const expiredAt = $('chat-expired-at');
+  if (expiredAt) expiredAt.textContent = formatDateTime(session.expiresAt);
+
+  // 截止后：只能记录反馈，问答、提示、外部 AI 入口全部关闭
+  const chatInput = $('chat-input');
+  if (chatInput) chatInput.hidden = expired;
+  const sendBtn = $('btn-chat-send');
+  if (sendBtn) {
+    sendBtn.hidden = expired;
+    sendBtn.disabled = expired || chatState.busy;
+  }
+
+  const addFeedbackBtn = $('btn-add-feedback');
+  if (addFeedbackBtn) {
+    addFeedbackBtn.hidden = expired;
+    addFeedbackBtn.textContent = state.feedbackOpen ? '收起反馈' : '记录反馈';
+  }
+
+  const feedback = $('chat-feedback');
+  if (feedback) feedback.hidden = !(expired || state.feedbackOpen);
+
+  const promptSection = $('prompt-section');
+  if (promptSection) promptSection.hidden = expired;
+
+  const keyRow = $('chat-key-row');
+  if (keyRow && expired) keyRow.style.display = 'none';
+
+  const chips = $('chat-chips');
+  if (chips && expired) chips.style.display = 'none';
+
+  updateChatKeyUI();
+}
+
+function toggleFeedbackComposer() {
+  if (isSessionExpired(state.session)) return;
+  state.feedbackOpen = !state.feedbackOpen;
+  updateChatValidityUI();
+  if (state.feedbackOpen) {
+    const input = $('feedback-input');
+    if (input) setTimeout(() => input.focus({ preventScroll: true }), 60);
+  }
+}
+
+function saveFeedback() {
+  const session = state.session;
+  if (!session) return;
+  const input = $('feedback-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+
+  appendChatMessage('feedback', text, { persist: true });
+  input.value = '';
+  autoGrow(input);
+  showToast('反馈已记录在本机');
+
+  // 记录反馈后把面板留在原位，方便继续补记
+  if (!isSessionExpired(session)) {
+    state.feedbackOpen = true;
+    updateChatValidityUI();
+  }
 }
 
 function buildChatSystemPrompt() {
@@ -1081,18 +1402,26 @@ async function requestGemini(key, text) {
 async function sendChatMessage() {
   if (chatState.busy) return;
 
+  // 占卦为一时之像：有效期过后不再解卦，只留反馈
+  if (isSessionExpired(state.session)) {
+    updateChatValidityUI();
+    showToast('本次交流已截止，只能记录反馈');
+    return;
+  }
+
   const input = $('chat-input');
   if (!input) return;
   const text = input.value.trim();
   if (!text) return;
 
   if (!getGeminiKey()) {
-    openChatSettings();
-    appendChatMessage('system', '配置 Gemini Key 后就能直接对话。不想用 Key？点下方「复制解卦提示」交给任意 AI 也可以。');
+    const keyRow = $('chat-key-row');
+    if (keyRow) keyRow.style.display = 'flex';
+    appendChatMessage('error', '请先在上方保存你的 Gemini API Key。');
     return;
   }
   if (!navigator.onLine) {
-    appendChatMessage('system', '当前离线，无法连接 Gemini。卦象与复制提示仍可正常使用。');
+    appendChatMessage('error', '当前处于离线状态，无法调用 Gemini。卦象与解卦提示仍可正常使用。');
     return;
   }
 
@@ -1111,7 +1440,7 @@ async function sendChatMessage() {
   chatState.busy = true;
   if (btn) {
     btn.disabled = true;
-    btn.classList.add('loading');
+    btn.textContent = '解卦中…';
   }
   const typing = appendTyping();
 
@@ -1122,6 +1451,15 @@ async function sendChatMessage() {
     chatState.history.push({ role: 'model', text: reply.text });
     // Interactions API 的服务端会话句柄
     if (reply.id) chatState.previousInteractionId = reply.id;
+
+    // 成功的一问一答才写入本地记录
+    persistMessage('user', text);
+    persistMessage('model', reply.text);
+    if (state.session && !state.session.ephemeral) {
+      if (reply.id) state.session.previousInteractionId = reply.id;
+      state.session.transport = chatState.transport;
+      saveSession(state.session);
+    }
   } catch (err) {
     if (typing) typing.remove();
     chatState.history.pop(); // 回滚失败的用户提问，避免污染上下文
@@ -1132,11 +1470,11 @@ async function sendChatMessage() {
   } finally {
     chatState.busy = false;
     if (btn) {
-      btn.disabled = false;
+      btn.textContent = '发送';
       btn.classList.remove('loading');
     }
     autoGrow(input);
-    syncSendButton();
+    updateChatValidityUI();
   }
 }
 
@@ -1184,7 +1522,8 @@ function applyCast(numbers) {
   state.throws = numbers.map((n) => ({ num: n, ...LINE_INFO[n] }));
   state.currentThrow = 6;
   state.animating = false;
-  showResult();
+  // dev 快捷出结果不写入卦历，避免调试记录淹没真实起卦
+  showResult({ ephemeral: true });
 }
 
 function renderDevBar() {
@@ -1287,6 +1626,110 @@ function renderDomainHexagram() {
     '<span class="symbol">' + h.symbol + '</span> ' + h.name;
 }
 
+// ── 12.5 卦历（本地记录浏览器） ──────────────────────
+function ensureHistoryPanel() {
+  if ($('history-overlay')) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'history-overlay';
+  overlay.className = 'history-overlay';
+  overlay.hidden = true;
+  overlay.innerHTML = `
+    <div class="history-sheet" role="dialog" aria-modal="true" aria-labelledby="history-title">
+      <div class="history-head">
+        <div>
+          <div id="history-title" class="history-title">卦历</div>
+          <div class="history-sub">本机保存 · 解卦交流 ${Math.round(CHAT_VALID_MS / 3600000)} 小时</div>
+        </div>
+        <button id="btn-history-close" class="history-close" aria-label="关闭卦历">×</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+      <div class="history-foot">
+        <button id="btn-history-clear" class="chat-text-btn">清空全部记录</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function renderHistoryList() {
+  const listEl = $('history-list');
+  if (!listEl) return;
+
+  const sessions = loadSessions();
+  if (!sessions.length) {
+    listEl.innerHTML = '<p class="history-empty">还没有记录。起一卦，解卦对话会自动存在本机。</p>';
+    return;
+  }
+
+  listEl.innerHTML = sessions.map((session) => {
+    const p = DATA.hexagrams.find((h) => h.id === session.primaryId);
+    const t = DATA.hexagrams.find((h) => h.id === session.transformedId);
+    const moving = (session.movingIndices || []).length;
+    const expired = isSessionExpired(session);
+    const rounds = (session.messages || []).filter((m) => !m.kind && m.role === 'user').length;
+    const feedbacks = (session.messages || []).filter((m) => m.role === 'feedback').length;
+
+    const title = p ? `${p.symbol} ${p.name}` : '未知卦';
+    const change = moving > 0 && t
+      ? `变 ${t.symbol} ${t.name} · ${moving} 爻动`
+      : '六爻皆静';
+
+    const meta = [
+      formatDateTime(session.createdAt),
+      rounds ? `${rounds} 问` : '未解卦',
+      feedbacks ? `${feedbacks} 条反馈` : null,
+    ].filter(Boolean).join(' · ');
+
+    return `
+      <button type="button" class="history-item" data-session="${escapeHtml(session.id)}">
+        <span class="hi-top">
+          <span class="hi-gan">${escapeHtml(title)}</span>
+          <span class="hi-status ${expired ? 'expired' : 'open'}">${expired ? '已截止' : '交流中'}</span>
+        </span>
+        <span class="hi-change">${escapeHtml(change)}</span>
+        <span class="hi-meta">${escapeHtml(meta)}</span>
+      </button>`;
+  }).join('');
+}
+
+function openHistory() {
+  ensureHistoryPanel();
+  renderHistoryList();
+  const overlay = $('history-overlay');
+  if (overlay) overlay.hidden = false;
+  document.body.classList.add('history-open');
+}
+
+function closeHistory() {
+  const overlay = $('history-overlay');
+  if (overlay) overlay.hidden = true;
+  document.body.classList.remove('history-open');
+}
+
+function openSessionById(id) {
+  const session = getSessionById(id);
+  if (!session) {
+    showToast('这条记录已不在本机');
+    renderHistoryList();
+    return;
+  }
+  closeHistory();
+  showResult({ session });
+}
+
+function clearHistory() {
+  if (!loadSessions().length) return;
+  if (!window.confirm('清空本机所有起卦记录？此操作不可撤销。')) return;
+  try {
+    localStorage.removeItem(SESSIONS_KEY);
+  } catch {
+    // 忽略隐私模式下的失败
+  }
+  renderHistoryList();
+  showToast('本机记录已清空');
+}
+
 // ── 11. Event handlers ────────────────────────────────
 function setupEvents() {
   $('btn-start').addEventListener('click', startDivination);
@@ -1303,83 +1746,82 @@ function setupEvents() {
 
     const isHidden = allLines.style.display === 'none';
     allLines.style.display = isHidden ? 'block' : 'none';
-    toggleBtn.querySelector('span').textContent = isHidden ? '收起变卦爻辞' : '变卦六爻爻辞';
+    toggleBtn.textContent = isHidden ? '收起爻辞' : '显示全部爻辞';
     toggleBtn.classList.toggle('active', isHidden);
-    toggleBtn.setAttribute('aria-expanded', String(isHidden));
   });
 
-  // Prompt、分享、chat 设置、快捷回复、跳转
+  // Prompt、分享、chat 设置、快捷回复
   document.addEventListener('click', (e) => {
     if (e.target.closest('#btn-gen-prompt')) generatePrompt();
     if (e.target.closest('#btn-copy-prompt')) copyPrompt();
     if (e.target.closest('#btn-share-ai')) shareToGemini();
 
-    if (e.target.closest('#btn-chat-settings')) {
-      const panel = $('chat-settings');
-      if (panel) panel.hidden = !panel.hidden;
-    }
     if (e.target.closest('#btn-save-key')) saveKeyFromInput();
     if (e.target.closest('#btn-clear-key')) clearGeminiKey();
+    if (e.target.closest('#btn-change-key')) {
+      const row = $('chat-key-row');
+      if (row) row.style.display = 'flex';
+      const input = $('gemini-key');
+      if (input) input.focus();
+    }
+    if (e.target.closest('#btn-add-feedback')) toggleFeedbackComposer();
+    if (e.target.closest('#btn-feedback-save')) saveFeedback();
+    if (e.target.closest('#btn-chat-send')) sendChatMessage();
+
+    // 卦历：打开 / 关闭 / 清空 / 回看某条记录
+    if (e.target.closest('#btn-history')) openHistory();
+    if (e.target.closest('#btn-history-close')) closeHistory();
+    if (e.target.closest('#btn-history-clear')) clearHistory();
+    if (e.target.id === 'history-overlay') closeHistory();
+    const historyItem = e.target.closest('.history-item');
+    if (historyItem) {
+      openSessionById(historyItem.dataset.session || '');
+      return;
+    }
 
     // 快捷回复 chip
     const chip = e.target.closest('.chat-chip');
     if (chip) {
       const q = chip.dataset.q || '';
       const input = $('chat-input');
-      if (input) {
-        input.value = q;
-        syncSendButton();
-      }
+      if (input) input.value = q;
       if (!getGeminiKey()) {
-        openChatSettings();
-        showToast('配置 Key 后即可对话，或复制提示去外部 AI');
+        const keyRow = $('chat-key-row');
+        if (keyRow) keyRow.style.display = 'flex';
+        showToast('配置 Key 后即可对话，或生成解卦提示去外部 AI');
       } else {
         sendChatMessage();
       }
       return;
     }
-
-    // 「带着卦象去解卦」 跳转
-    const jump = e.target.closest('[data-scroll]');
-    if (jump) {
-      const target = $(jump.dataset.scroll);
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        if (jump.dataset.scroll === 'chat-panel') {
-          if (!getGeminiKey()) {
-            openChatSettings();
-          } else {
-            const input = $('chat-input');
-            if (input) setTimeout(() => input.focus({ preventScroll: true }), 320);
-          }
-        }
-      }
-    }
   });
 
-  // 发送表单（回车 / 点击发送钮）
-  document.addEventListener('submit', (e) => {
-    if (e.target && e.target.id === 'chat-composer') {
-      e.preventDefault();
-      sendChatMessage();
-    }
-  });
-
-  // Enter 发送，Shift + Enter 换行；兼容中文输入法
+  // Cmd/Ctrl + Enter 发送；保留普通 Enter 作为发送（输入法组合时忽略）
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeHistory();
+      return;
+    }
+    // 反馈框：Cmd/Ctrl + Enter 保存（普通 Enter 用于换行）
+    if (e.target && e.target.id === 'feedback-input') {
+      autoGrow(e.target);
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
+        e.preventDefault();
+        saveFeedback();
+      }
+      return;
+    }
     if (!e.target || e.target.id !== 'chat-input') return;
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey) && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       sendChatMessage();
     }
   });
 
-  // 输入框随内容自动长高，并同步发送键状态
+  // 输入框随内容自动长高
   document.addEventListener('input', (e) => {
-    if (e.target && e.target.id === 'chat-input') {
-      autoGrow(e.target);
-      syncSendButton();
-    }
+    if (e.target && e.target.id === 'chat-input') autoGrow(e.target);
+    if (e.target && e.target.id === 'feedback-input') autoGrow(e.target);
   });
 
   // Force refresh
@@ -1392,7 +1834,11 @@ async function init() {
   renderDomainHexagram();
   $('btn-start').disabled = false;
   $('btn-start').textContent = '起卦';
+  ensureHistoryPanel();
   setupEvents();
+
+  // 每秒刷新有效期倒计时；无结果页时函数自身会跳过
+  setInterval(updateChatValidityUI, 1000);
 
   // Online status for refresh button
   updateOnlineStatus();

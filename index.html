@@ -12,7 +12,10 @@
   <div id="app">
     <header id="header">
       <h1>周易起卦</h1>
-      <button id="btn-refresh" class="refresh-btn hidden" title="强制刷新（从服务器获取最新内容）">⟳</button>
+      <div class="header-actions">
+        <button id="btn-history" class="header-btn" title="卦历 · 本机解卦记录" aria-label="卦历">卦</button>
+        <button id="btn-refresh" class="refresh-btn hidden" title="强制刷新（从服务器获取最新内容）" aria-label="强制刷新">⟳</button>
+      </div>
     </header>
 
     <main id="main">
