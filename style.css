@@ -746,6 +746,177 @@ body {
   vertical-align: middle;
 }
 
+/* ── Local Gemini chat ── */
+.chat-section {
+  margin-top: 8px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.chat-section h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.chat-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.chat-desc a {
+  color: var(--primary);
+}
+
+.chat-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-field-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.chat-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-mini-btn {
+  margin-top: 0;
+  padding: 8px 16px;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-status {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
+.chat-status:empty {
+  display: none;
+}
+
+.chat-link {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  margin-left: 4px;
+  color: var(--primary);
+  font-family: var(--font);
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.chat-log:empty {
+  display: none;
+}
+
+.chat-msg {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.chat-msg.user {
+  background: var(--bg);
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.chat-msg.model {
+  background: var(--surface);
+}
+
+.chat-msg.pending {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.chat-msg.error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+  font-size: 0.8125rem;
+}
+
+.chat-section .prompt-btn {
+  margin-top: 12px;
+}
+
+/* ── Dev bar（仅 localhost / ?dev=1） ── */
+#dev-bar {
+  position: fixed;
+  left: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 120;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--primary);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  opacity: 0.92;
+}
+
+#dev-bar button,
+#dev-bar input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid #57534e;
+  border-radius: 6px;
+  background: #1c1917;
+  color: #e7e5e4;
+  cursor: pointer;
+}
+
+#dev-bar input {
+  width: 8.5rem;
+  cursor: text;
+}
+
+#dev-bar button:hover,
+#dev-bar input:hover {
+  background: #44403c;
+}
+
+#dev-bar input:focus {
+  outline: none;
+  border-color: #a8a29e;
+}
+
 /* ── Arrow indicator between hexagrams ── */
 .arrow-down {
   text-align: center;

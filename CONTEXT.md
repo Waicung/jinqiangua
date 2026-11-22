@@ -44,7 +44,28 @@ PWA 安装清单文件，定义应用名称、图标、主题色、显示模式�
 _Use_：应用清单、PWA 清单
 _Avoid_：配置文件（过于泛泛）
 
+**本机对话（Gemini API）**：
+结果页可选的对话区块。用户粘贴自己的 Gemini API Key 后，浏览器直接调用 `generativelanguage.googleapis.com`，以多轮对话方式追问解卦。Key 通过 `x-goog-api-key` 请求头传递（不走 URL 查询参数），仅存于本机 `localStorage`（键名 `gemini_api_key`），不经过任何服务器；「清除 Key」按钮删除它，保存时留空则保留已存 Key。
+
+传输层优先使用 **Interactions API**（`POST /v1beta/interactions`，2026-06 GA，官方推荐接口）：每轮只发新输入，历史由服务端 `previous_interaction_id` 维护，`system_instruction` 为 interaction 级参数故每轮重发，回复从 `steps[].type === 'model_output'` 的 `content[].text` 拼出。若该接口返回 404/405（老账号或老区域），自动回退到仍受支持的 legacy `generateContent`（重放完整 `contents` 数组）；可用的传输层会被记住。
+
+模型名在 UI 中可改、存于 `localStorage`（键名 `gemini_model`），默认 `gemini-3.8-flash`，允许带 `models/` 前缀。这是刻意的：模型名比代码活得短，`gemini-2.5-flash` 已对新用户下线；遇到 404 时错误提示会引导用户改成 `gemini-3.8-flash` 或别名 `gemini-flash-latest`。系统提示词由当前卦象资料构成（复用解卦提示的格式化结果，省略一次性解卦指令）。请求失败时回滚该轮上下文，并把问题放回输入框以便重试。未保存 Key 或离线时该区块不可用，复制 prompt 流程照常。
+
+注意：使用 Interactions API 时对话记录默认由 Google 服务端保存（为了 `previous_interaction_id` 能取回历史）。「Key 不离设备」仍然成立，但「对话内容不离开设备」仅对复制 prompt 的旧流程成立。
+_Use_：本机对话、自带 Key、Interactions API
+_Avoid_：AI 解卦（易误解为应用内置免费 AI）、服务端代理（本项目无后端）
+
+**开发快捷入口（Dev）**：
+仅在 `localhost` / `127.0.0.1` 或 URL 带 `?dev=1` 时生效，在生产域名（651372.xyz）下不渲染、`?cast` 也不生效。作用是把「摇卦六次」压缩成一步，便于反复调试结果页与对话面板：
+- 左下角 dev bar 的「⚡ 直接出结果」：随机摇六次，跳过 1.2s×6 的动画直接渲染结果页；
+- `?cast=` 参数：`?cast=7,8,9,7,6,8` 或紧凑的 `?cast=789678`（6 个 6~9 的数，即每次三枚硬币的和），可复现同一卦；
+- dev bar 输入框里直接键入这串数值回车同效。
+
+非法值（数量不对或出现 6~9 以外的数）静默忽略，回到正常起卦流程。每次出结果都会重建结果 DOM 并 `resetChat()`，所以可无限次「直接出结果」而不污染对话；已存的 API Key 与模型设置保留在 `localStorage`。
+_Use_：开发快捷入口、跳过摇卦、?cast
+_Avoid_：测试模式（应用没有其他测试开关）
+
 **离线可用**：
-应用在无网络连接时仍可完整运行。当前实现通过 Service Worker 缓存所有资产（index.html, style.css, app.js, manifest.json, icons, data/iching.json）。起卦流程（摇卦→生成卦象→显示卦辞爻辞→生成解卦提示）全程不依赖网络。分享到 Gemini 按钮在离线时自然降级（打开链接失败），不影响核心功能。
+应用在无网络连接时仍可完整运行。当前实现通过 Service Worker 缓存所有资产（index.html, style.css, app.js, manifest.json, icons, data/iching.json）。起卦流程（摇卦→生成卦象→显示卦辞爻辞→生成解卦提示）全程不依赖网络。分享到 Gemini 按钮在离线时自然降级（打开链接失败），不影响核心功能。本机对话区块依赖网络，离线时不可用（其余功能照旧）。
 _Use_：离线可用、离线就绪
 _Avoid_：纯离线（暗示不能在线使用）

@@ -280,6 +280,9 @@ function showResult() {
   state.primaryLineTypes = primaryLineTypes;
   state.transformedLineTypes = transformedLineTypes;
 
+  // 新一次起卦重新开始对话
+  resetChat();
+
   // Build result HTML
   const container = $('result-content');
   container.innerHTML = '';
@@ -313,6 +316,8 @@ function showResult() {
 
   // ── AI prompt section ──
   container.appendChild(renderPromptSection());
+  // ── 可选：在应用中与 Gemini 对话（用户自带 Key） ──
+  container.appendChild(renderChatSection());
 
   showPhase('phase-result');
   state.phase = 'result';
@@ -527,8 +532,8 @@ function trigramInfo(binary) {
   };
 }
 
-function generatePrompt() {
-  const question = $('prompt-question').value.trim() || '（未提供具体问题，请从卦象角度进行一般性解读）';
+function buildPromptText(questionRaw, options = {}) {
+  const question = (questionRaw || '').trim() || '（未提供具体问题，请从卦象角度进行一般性解读）';
   const p = state.primary;
   const t = state.transformed;
   const mls = state.movingLines;
@@ -590,6 +595,9 @@ ${question}
 `;
   }
 
+  // 对话模式只需要卦象资料，不需要一次性的解卦指令
+  if (options.instructions === false) return prompt;
+
   // ── 解卦指令 ──
   prompt += `
 ---
@@ -612,7 +620,11 @@ ${question}
 `;
   }
 
-  $('prompt-text').textContent = prompt;
+  return prompt;
+}
+
+function generatePrompt() {
+  $('prompt-text').textContent = buildPromptText($('prompt-question').value);
   $('prompt-output').style.display = 'block';
   $('copy-feedback').textContent = '';
 }
@@ -668,6 +680,436 @@ async function copyText(text) {
     document.execCommand('copy');
     document.body.removeChild(ta);
   }
+}
+
+// ── 10.6. Local Gemini chat (user-supplied API key) ─────
+// 直接在浏览器调用 Gemini REST API，Key 仅存于本机 localStorage，
+// 不经过任何服务器。离线时该区块不可用，其余功能不受影响。
+//
+// 传输层：优先 Interactions API（2026-06 GA，官方推荐给新项目），
+// 不可用时（404/405，如老账号或老区域）自动回退到 legacy 的
+// generateContent（官方声明仍“fully supported”）。
+// 模型名可在 UI 中修改，避免模型迭代时又需改代码。
+const GEMINI_MODEL_DEFAULT = 'gemini-3.8-flash';
+const GEMINI_KEY_STORAGE = 'gemini_api_key';
+const GEMINI_MODEL_STORAGE = 'gemini_model';
+const CHAT_TIMEOUT_MS = 60000;
+
+const chatState = {
+  history: [],        // [{ role: 'user' | 'model', text }]，回退到 generateContent 时重放
+  system: '',
+  busy: false,
+  transport: 'interactions', // 记住当前可用的传输层
+  previousInteractionId: '',  // Interactions API 的会话句柄
+};
+
+function getGeminiKey() {
+  try {
+    return localStorage.getItem(GEMINI_KEY_STORAGE) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setGeminiKey(key) {
+  try {
+    if (key) localStorage.setItem(GEMINI_KEY_STORAGE, key);
+    else localStorage.removeItem(GEMINI_KEY_STORAGE);
+  } catch {
+    // 隐私模式下 localStorage 可能不可用，忽略
+  }
+}
+
+// 允许用户填 `gemini-3.8-flash` 或 `models/gemini-3.8-flash`
+function getGeminiModel() {
+  let model = '';
+  try {
+    model = localStorage.getItem(GEMINI_MODEL_STORAGE) || '';
+  } catch {
+    model = '';
+  }
+  model = (model || GEMINI_MODEL_DEFAULT).trim().replace(/^models\//, '');
+  return model || GEMINI_MODEL_DEFAULT;
+}
+
+function setGeminiModel(model) {
+  const clean = (model || '').trim().replace(/^models\//, '');
+  try {
+    if (clean && clean !== GEMINI_MODEL_DEFAULT) localStorage.setItem(GEMINI_MODEL_STORAGE, clean);
+    else localStorage.removeItem(GEMINI_MODEL_STORAGE);
+  } catch {
+    // 同上，忽略
+  }
+}
+
+function resetChat() {
+  chatState.history = [];
+  chatState.system = '';
+  chatState.busy = false;
+  chatState.previousInteractionId = '';
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+}
+
+// 极简 Markdown：先转义，再只识别标题/加粗/列表
+function formatChatText(text) {
+  return escapeHtml(text)
+    .replace(/^#{1,6}\s*(.+)$/gm, '<strong>$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^\s*[-*]\s+/gm, '· ');
+}
+
+function renderChatSection() {
+  const section = document.createElement('div');
+  section.className = 'result-section chat-section';
+  section.innerHTML = `
+    <h2>💬 在应用中对话（Gemini）</h2>
+    <p class="chat-desc">使用你自己的 Gemini API Key，在本地直接与模型多轮对话。Key 仅保存在本机浏览器，不会上传到任何服务器。可在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免费获取。</p>
+    <div id="chat-key-row" class="chat-settings">
+      <label class="chat-field">
+        <span class="chat-field-label">API Key</span>
+        <input id="gemini-key" type="password" class="prompt-input" placeholder="粘贴 Gemini API Key（留空则保留已存 Key）" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="chat-field">
+        <span class="chat-field-label">模型</span>
+        <input id="gemini-model" class="prompt-input" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="chat-btn-row">
+        <button id="btn-save-key" class="btn-secondary chat-mini-btn">保存</button>
+        <button id="btn-clear-key" class="btn-secondary chat-mini-btn">清除 Key</button>
+      </div>
+    </div>
+    <p id="chat-key-status" class="chat-status"></p>
+    <div id="chat-log" class="chat-log"></div>
+    <textarea id="chat-input" class="prompt-input" rows="2" placeholder="例如：请解读本次卦象，重点看动爻提示我该注意什么？"></textarea>
+    <button id="btn-chat-send" class="btn-primary prompt-btn">发送</button>
+  `;
+  setTimeout(() => updateChatKeyUI(), 0);
+  return section;
+}
+
+function updateChatKeyUI() {
+  const row = $('chat-key-row');
+  if (!row) return;
+
+  const modelInput = $('gemini-model');
+  // 每次重建都回填当前设置（不渲染 Key 本身）
+  if (modelInput && !modelInput.matches(':focus')) modelInput.value = getGeminiModel();
+
+  const status = $('chat-key-status');
+  const key = getGeminiKey();
+
+  if (key) {
+    row.style.display = 'none';
+    status.innerHTML =
+      `🔑 已保存本机 Key（…${escapeHtml(key.slice(-4))}） · 模型 ${escapeHtml(getGeminiModel())} ` +
+      `<button id="btn-change-key" class="chat-link">更换 / 清除</button>`;
+  } else {
+    row.style.display = 'flex';
+    status.textContent = '尚未保存 Key：对话功能不可用，但「生成解卦提示」与复制功能照常使用。';
+  }
+}
+
+function saveKeyFromInput() {
+  const keyInput = $('gemini-key');
+  const modelInput = $('gemini-model');
+  if (!keyInput || !modelInput) return;
+
+  // 留空 = 只改模型，不动已存的 Key（清除 Key 用单独的按钮）
+  const key = keyInput.value.trim();
+  if (key) setGeminiKey(key);
+  setGeminiModel(modelInput.value);
+  keyInput.value = '';
+  resetChat(); // Key / 模型变更后重新开始对话
+  updateChatKeyUI();
+}
+
+function appendChatMessage(role, text) {
+  const log = $('chat-log');
+  if (!log) return null;
+  const el = document.createElement('div');
+  el.className = `chat-msg ${role}`;
+  el.innerHTML = formatChatText(text);
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+function buildChatSystemPrompt() {
+  return `你是一位精通《周易》的占卜解卦师。以下是用户本次起卦的完整资料：
+
+${buildPromptText('（用户会在对话中提出具体问题）', { instructions: false })}
+---
+
+请依据以上资料与用户多轮对话：回答追问时简洁、具体、有针对性，不要重复粘贴整段卦象原文。`;
+}
+
+async function postJson(url, body, key) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // 用 header 传 Key，避免出现在 URL / 日志 / Referer 中
+        'x-goog-api-key': key,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => null);
+    return { res, data };
+  } catch (err) {
+    throw new Error(
+      err.name === 'AbortError' ? '请求超时，请稍后重试' : '网络错误，无法连接 Gemini'
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Interactions API：只需发本轮新输入，历史由 previous_interaction_id 维护
+function callInteractions(key, text) {
+  const body = {
+    model: getGeminiModel(),
+    input: text,
+    // system_instruction 是 interaction 级别的，每轮都要重发
+    system_instruction: chatState.system,
+  };
+  if (chatState.previousInteractionId) {
+    body.previous_interaction_id = chatState.previousInteractionId;
+  }
+  return postJson('https://generativelanguage.googleapis.com/v1beta/interactions', body, key);
+}
+
+// 旧接口 generateContent：需重放完整 contents
+function callGenerateContent(key) {
+  return postJson(
+    `https://generativelanguage.googleapis.com/v1beta/models/${getGeminiModel()}:generateContent`,
+    {
+      systemInstruction: { parts: [{ text: chatState.system }] },
+      contents: chatState.history.map((m) => ({
+        role: m.role,
+        parts: [{ text: m.text }],
+      })),
+    },
+    key
+  );
+}
+
+function parseInteractionReply(data) {
+  const steps = (data && data.steps) || [];
+  const texts = [];
+  for (const step of steps) {
+    if (step.type !== 'model_output' || !Array.isArray(step.content)) continue;
+    for (const block of step.content) {
+      if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text);
+    }
+  }
+  return { text: texts.join('').trim(), id: (data && data.id) || '' };
+}
+
+function parseGenerateContentReply(data) {
+  const candidate = data && data.candidates && data.candidates[0];
+  const parts = (candidate && candidate.content && candidate.content.parts) || [];
+  const reason =
+    (data && data.promptFeedback && data.promptFeedback.blockReason) ||
+    (candidate && candidate.finishReason);
+  return { text: parts.map((p) => p.text || '').join('').trim(), reason };
+}
+
+// 上游文案自带句点时避免出现「.。」这样的双标点
+function stripEnd(msg) {
+  return String(msg || '').trim().replace(/[.。]$/, '');
+}
+
+function apiError(status, data) {
+  const msg = (data && data.error && data.error.message) || '';
+  if (status === 400 && /api key/i.test(msg)) {
+    return new Error('API Key 无效，请检查后重新保存');
+  }
+  if (status === 401 || status === 403) {
+    return new Error(
+      `该 Key 无权访问模型「${getGeminiModel()}」：${stripEnd(msg) || '请确认该模型已对你的账号开放'} 可在「更换 / 清除」中换个模型名（如 gemini-flash-latest）。`
+    );
+  }
+  if (status === 404) {
+    return new Error(
+      `模型「${getGeminiModel()}」不可用：${stripEnd(msg) || '可能已对新用户下线'} 请在「更换 / 清除」中改为 gemini-3.8-flash 或 gemini-flash-latest。`
+    );
+  }
+  if (status === 429) return new Error('调用额度已用尽，请稍后重试或更换 Key');
+  return new Error(msg || `请求失败（HTTP ${status}）`);
+}
+
+async function requestGemini(key, text) {
+  // 记住上次成功的传输层；首次默认 Interactions API
+  const attempts =
+    chatState.transport === 'generateContent'
+      ? ['generateContent']
+      : ['interactions', 'generateContent'];
+
+  let result = null;
+  for (const transport of attempts) {
+    result = transport === 'interactions'
+      ? await callInteractions(key, text)
+      : await callGenerateContent(key);
+
+    if (result.res.ok) {
+      chatState.transport = transport;
+      const reply = transport === 'interactions'
+        ? parseInteractionReply(result.data)
+        : parseGenerateContentReply(result.data);
+
+      if (reply.text) return reply;
+
+      // in_progress / requires_action 等：明确告知而不是空回复
+      const status = result.data && result.data.status;
+      throw new Error(
+        reply.reason
+          ? `模型未返回内容（${reply.reason}）`
+          : status
+            ? `模型未返回内容（${status}）`
+            : '模型未返回内容'
+      );
+    }
+
+    // 只有「接口不存在」才值得换另一条路，其余错误直接抛
+    if (result.res.status !== 404 && result.res.status !== 405) break;
+  }
+
+  throw apiError(result.res.status, result.data);
+}
+
+async function sendChatMessage() {
+  if (chatState.busy) return;
+
+  const input = $('chat-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+
+  if (!getGeminiKey()) {
+    appendChatMessage('error', '请先在上方保存你的 Gemini API Key。');
+    return;
+  }
+  if (!navigator.onLine) {
+    appendChatMessage('error', '当前处于离线状态，无法调用 Gemini。');
+    return;
+  }
+
+  if (!chatState.system) chatState.system = buildChatSystemPrompt();
+
+  input.value = '';
+  const userEl = appendChatMessage('user', text);
+  chatState.history.push({ role: 'user', text });
+
+  const btn = $('btn-chat-send');
+  chatState.busy = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '解卦中…';
+  }
+  const pending = appendChatMessage('pending', '思考中…');
+
+  try {
+    const reply = await requestGemini(getGeminiKey(), text);
+    if (pending) pending.remove();
+    appendChatMessage('model', reply.text);
+    chatState.history.push({ role: 'model', text: reply.text });
+    // Interactions API 的服务端会话句柄
+    if (reply.id) chatState.previousInteractionId = reply.id;
+  } catch (err) {
+    if (pending) pending.remove();
+    chatState.history.pop(); // 回滚失败的用户提问，避免污染上下文
+    if (userEl) userEl.remove();
+    // 把问题放回输入框，方便修改 Key 后重试
+    if (input && !input.value.trim()) input.value = text;
+    appendChatMessage('error', '⚠️ ' + (err.message || '请求失败'));
+  } finally {
+    chatState.busy = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '发送';
+    }
+  }
+}
+
+// ── 10.7. Dev shortcuts (跳过摇卦) ──────────────────────
+// 只在本地开发（localhost / 127.0.0.1）或带 ?dev=1 时生效，
+// 生产环境不会出现。两种跳过摇卦的方式：
+//   ?cast=7,8,9,7,6,8   直接按给定六爻出结果（便于复现同一个卦）
+//   左下角「⚡ 直接出结果」 随机摇六次并立即渲染
+const DEV_MODE = (() => {
+  try {
+    const host = location.hostname;
+    const isLocal =
+      host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+      host === '::1' || host === '[::1]';
+    return isLocal || new URLSearchParams(location.search).has('dev');
+  } catch {
+    return false;
+  }
+})();
+
+function parseCast(str) {
+  // 允许 7,8,9,7,6,8 / 7 8 9 7 6 8 / 789678
+  const raw = String(str || '').trim();
+  const nums = /^[6-9]{6}$/.test(raw)
+    ? raw.split('').map(Number)
+    : raw.split(/[^6-9]+/).filter(Boolean).map(Number);
+  if (nums.length !== 6 || nums.some((n) => !LINE_INFO[n])) return null;
+  return nums;
+}
+
+function devCastFromUrl() {
+  try {
+    return parseCast(new URLSearchParams(location.search).get('cast'));
+  } catch {
+    return null;
+  }
+}
+
+function randomCast() {
+  return Array.from({ length: 6 }, () => tossCoins().sum);
+}
+
+// 不播动画，直接把这 6 个和值当作摇出的结果
+function applyCast(numbers) {
+  state.throws = numbers.map((n) => ({ num: n, ...LINE_INFO[n] }));
+  state.currentThrow = 6;
+  state.animating = false;
+  showResult();
+}
+
+function renderDevBar() {
+  if (!DEV_MODE) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'dev-bar';
+  bar.innerHTML = `
+    <button id="dev-skip" title="随机摇六次并直接出结果">⚡ 直接出结果</button>
+    <input id="dev-cast" placeholder="7,8,9,7,6,8" title="输入 6 个 6~9 的数后回车" autocomplete="off" spellcheck="false">
+  `;
+  document.body.appendChild(bar);
+
+  $('dev-skip').addEventListener('click', () => applyCast(randomCast()));
+  $('dev-cast').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const nums = parseCast(e.target.value);
+    if (!nums) {
+      e.target.value = '';
+      e.target.placeholder = '需要 6 个 6~9 的数';
+      return;
+    }
+    applyCast(nums);
+    e.target.blur();
+  });
 }
 
 // ── 10.5. Online status ──────────────────────────────────
@@ -772,6 +1214,29 @@ function setupEvents() {
     if (e.target.closest('#btn-share-ai')) shareToGemini();
   });
 
+  // Local Gemini chat
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#btn-save-key')) saveKeyFromInput();
+    if (e.target.closest('#btn-clear-key')) {
+      setGeminiKey('');
+      resetChat();
+      updateChatKeyUI();
+    }
+    if (e.target.closest('#btn-change-key')) {
+      $('chat-key-row').style.display = 'flex';
+      $('gemini-key').focus();
+    }
+    if (e.target.closest('#btn-chat-send')) sendChatMessage();
+  });
+
+  // Cmd/Ctrl + Enter 发送
+  document.addEventListener('keydown', (e) => {
+    if (e.target && e.target.id === 'chat-input' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
   // Force refresh
   $('btn-refresh').addEventListener('click', forceRefresh);
 }
@@ -788,6 +1253,13 @@ async function init() {
   updateOnlineStatus();
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
+
+  // 开发快捷入口（只在 localhost 或 ?dev=1 时生效，生产环境不可见）
+  if (DEV_MODE) {
+    renderDevBar();
+    const urlCast = devCastFromUrl();
+    if (urlCast) applyCast(urlCast);
+  }
 
   // Version badge (bottom-right corner)
   initVersionBadge();

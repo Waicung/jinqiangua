@@ -5,13 +5,14 @@
   "scripts": {
     "version": "bun run scripts/version.mjs",
     "predeploy": "bun run scripts/version.mjs",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "wrangler": "^4.118.0"
+    "wrangler": "^4.166.0"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   }
 }
