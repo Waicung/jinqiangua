@@ -2,7 +2,28 @@
    周易起卦 — Service Worker (Cache-First)
    ====================================================== */
 
-const CACHE_NAME = 'jinqiangua-v6';
+const CACHE_NAME = 'jinqiangua-v7';
+
+// Only http(s) requests can be stored in the Cache API.
+// Requests injected by browser extensions (chrome-extension://, …)
+// or other schemes must be passed straight through to the network.
+const isCacheableScheme = (url) =>
+  url.protocol === 'http:' || url.protocol === 'https:';
+
+// Fire-and-forget cache write that never produces an unhandled rejection.
+const safePut = (request, response) => {
+  try {
+    if (!isCacheableScheme(new URL(request.url))) return;
+  } catch {
+    return;
+  }
+  caches
+    .open(CACHE_NAME)
+    .then((cache) => cache.put(request, response))
+    .catch(() => {
+      /* caching is best-effort — ignore QuotaExceeded / unsupported schemes */
+    });
+};
 
 const STATIC_ASSETS = [
   '/',
@@ -55,12 +76,16 @@ self.addEventListener('fetch', (event) => {
   // version.json: network-first, so the badge always
   // reflects the live deployment (cache as offline fallback)
   const url = new URL(event.request.url);
+
+  // Ignore anything outside the Cache API's supported schemes
+  // (chrome-extension:// etc. injected by extensions, data:, blob:, …)
+  if (!isCacheableScheme(url)) return;
+
   if (url.pathname === '/version.json') {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          safePut(event.request, response.clone());
           return response;
         })
         .catch(() =>
@@ -85,10 +110,7 @@ self.addEventListener('fetch', (event) => {
           return response;
         }
         // Clone the response since it can only be consumed once
-        const responseClone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseClone);
-        });
+        safePut(event.request, response.clone());
         return response;
       }).catch(() => {
         // Network failed and not in cache — return offline fallback for navigation

@@ -53,6 +53,8 @@ const state = {
   // 当前这次起卦的本地记录（会话）
   session: null,
   feedbackOpen: false,
+  // 用户主动点「更换 / 清除」时展开设置行；否则每秒刷新的有效期检查会把它又收起
+  keyEditing: false,
 };
 
 // ── 4.5. Gemini connectivity check ────────────────────
@@ -295,6 +297,7 @@ function showResult(options = {}) {
   const session = existing || createSession(numbers, reading, !options.ephemeral);
   state.session = session;
   state.feedbackOpen = false;
+  state.keyEditing = false;
 
   // 新结果从会话恢复对话
   resetChat();
@@ -332,9 +335,7 @@ function showResult(options = {}) {
     container.appendChild(renderNoChangeNote());
   }
 
-  // ── AI prompt section ──
-  container.appendChild(renderPromptSection());
-  // ── 在应用中与 Gemini 对话（用户自带 Key） ──
+  // ── AI 解卦：应用内对话（自带 Key）+ 复制提示到外部 AI，同一个面板 ──
   container.appendChild(renderChatSection());
 
   // 新结果：收起上一次的复制提示 toast
@@ -505,21 +506,13 @@ function renderNoChangeNote() {
 // ── 10. AI Prompt ─────────────────────────────────────
 function updateShareButtonUI() {
   const btn = document.getElementById('btn-share-ai');
-  const desc = document.querySelector('.prompt-desc');
   if (!btn) return; // 还未渲染，跳过
 
-  if (state.geminiAvailable) {
-    btn.textContent = '🚀 在 Gemini 中打开';
-    if (desc) desc.innerHTML = '输入你的问题，一键生成结构化解卦 prompt。复制后可直接在 <strong>Gemini</strong> 中打开。';
-  } else {
-    btn.textContent = '📋 复制到豆包';
-    if (desc) desc.innerHTML = '输入你的问题，一键生成结构化解卦 prompt。复制后可直接打开 <strong>豆包</strong>。';
-  }
+  btn.textContent = state.geminiAvailable ? '🚀 在 Gemini 中打开' : '📋 复制到豆包';
 }
 
+// 解卦提示与对话共用同一个输入框：先看当前输入，再退回最后一条提问
 function currentQuestion() {
-  const promptInput = $('prompt-question');
-  if (promptInput && promptInput.value.trim()) return promptInput.value.trim();
   const input = $('chat-input');
   const typed = input ? input.value.trim() : '';
   if (typed) return typed;
@@ -550,28 +543,30 @@ function blockedByExpiry() {
   return true;
 }
 
-function renderPromptSection() {
-  const section = document.createElement('div');
-  section.className = 'result-section prompt-section';
-  section.id = 'prompt-section';
-  section.innerHTML = `
-    <h2>🤖 AI 解卦提示</h2>
-    <p class="prompt-desc">输入你的问题，一键生成结构化解卦 prompt。复制后可直接在 <strong>Gemini</strong> 中打开。</p>
-    <textarea id="prompt-question" class="prompt-input" rows="2" placeholder="输入你想问的问题（选填）…"></textarea>
-    <button id="btn-gen-prompt" class="btn-secondary prompt-btn">生成解卦提示</button>
-    <div id="prompt-output" class="prompt-output" style="display:none;">
-      <div class="prompt-label">📋 解卦 Prompt</div>
+// 外部 AI 提示：对话面板里的次要出口（没 Key / 想换模型时用）
+function promptOutputHtml() {
+  return `
+    <div id="prompt-output" class="prompt-output" hidden>
+      <div class="prompt-head">
+        <span class="prompt-label">📋 解卦提示（复制到外部 AI）</span>
+      </div>
       <pre id="prompt-text" class="prompt-text"></pre>
       <div class="prompt-actions">
-        <button id="btn-copy-prompt" class="btn-secondary prompt-btn">📋 复制</button>
-        <button id="btn-share-ai" class="btn-primary prompt-btn">🚀 在 Gemini 中打开</button>
+        <button id="btn-copy-prompt" class="btn-secondary prompt-btn" type="button">📋 复制</button>
+        <button id="btn-share-ai" class="btn-primary prompt-btn" type="button">🚀 在 Gemini 中打开</button>
       </div>
       <span id="copy-feedback" class="copy-feedback"></span>
     </div>
   `;
-  // DOM 创建后立即根据当前检测状态更新按钮文案
-  setTimeout(() => updateShareButtonUI(), 0);
-  return section;
+}
+
+function updatePromptToggleUI() {
+  const out = $('prompt-output');
+  const btn = $('btn-toggle-prompt');
+  if (!btn) return;
+  const open = !!out && !out.hidden;
+  btn.textContent = open ? '收起解卦提示' : '📋 生成解卦提示';
+  btn.classList.toggle('active', open);
 }
 
 function trigramInfo(binary) {
@@ -681,12 +676,28 @@ ${question}
 
 async function generatePrompt() {
   if (blockedByExpiry()) return '';
+  const out = $('prompt-output');
+  const pre = $('prompt-text');
+  if (!out || !pre) return '';
   const text = buildPromptText(currentQuestion());
-  $('prompt-text').textContent = text;
-  $('prompt-output').style.display = 'block';
+  pre.textContent = text;
+  out.hidden = false;
   const feedback = $('copy-feedback');
   if (feedback) feedback.textContent = '';
+  updatePromptToggleUI();
   return text;
+}
+
+// 同一个入口：没展开就生成，已展开就收起
+function togglePromptOutput() {
+  const out = $('prompt-output');
+  if (!out) return;
+  if (out.hidden) {
+    generatePrompt();
+  } else {
+    out.hidden = true;
+    updatePromptToggleUI();
+  }
 }
 
 async function copyPrompt() {
@@ -973,8 +984,8 @@ function renderChatSection() {
   section.className = 'result-section chat-section';
   section.id = 'chat-panel';
   section.innerHTML = `
-    <h2>💬 在应用中对话（Gemini）</h2>
-    <p class="chat-desc">使用你自己的 Gemini API Key，在本地直接与模型多轮对话。Key 仅保存在本机浏览器，不会上传到任何服务器。可在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免费获取。</p>
+    <h2>🤖 AI 解卦</h2>
+    <p class="chat-desc">用自己的 Gemini API Key 在这里多轮追问；不想配 Key 时，也可一键生成解卦提示，复制到任意 AI 助手。Key 仅保存在本机浏览器，不会上传到任何服务器。可在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免费获取。</p>
 
     <div id="chat-validity" class="chat-validity"></div>
 
@@ -1002,8 +1013,19 @@ function renderChatSection() {
     <p id="chat-key-status" class="chat-status"></p>
     <div id="chat-log" class="chat-log"></div>
     <div id="chat-chips" class="chat-chips"></div>
-    <textarea id="chat-input" class="prompt-input" rows="2" placeholder="例如：请解读本次卦象，重点看动爻提示我该注意什么？"></textarea>
-    <button id="btn-chat-send" class="btn-primary prompt-btn">发送</button>
+    <div id="chat-composer" class="chat-composer">
+      <textarea id="chat-input" rows="1" placeholder="请解读本次卦象，或追问你想知道的…" enterkeyhint="send"></textarea>
+      <button id="btn-chat-send" class="chat-send" type="button" aria-label="发送">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+
+    <div id="chat-foot" class="chat-foot-row">
+      <button id="btn-toggle-prompt" class="chat-foot-link" type="button">📋 生成解卦提示</button>
+      <button id="btn-add-feedback" class="chat-foot-link" type="button">记录反馈</button>
+    </div>
+
+    ${promptOutputHtml()}
 
     <div id="chat-feedback" class="chat-feedback" hidden>
       <div class="feedback-head">
@@ -1015,16 +1037,13 @@ function renderChatSection() {
         <button id="btn-feedback-save" class="btn-secondary chat-mini-btn" type="button">记录反馈</button>
       </div>
     </div>
-
-    <div class="chat-foot-row">
-      <button id="btn-add-feedback" class="chat-foot-link">记录反馈</button>
-    </div>
   `;
   setTimeout(() => {
     updateChatKeyUI();
     restoreChatLog();
     updateChatValidityUI();
     updateShareButtonUI();
+    updatePromptToggleUI();
   }, 0);
   return section;
 }
@@ -1047,7 +1066,7 @@ function updateChatKeyUI() {
   }
 
   if (key) {
-    row.style.display = 'none';
+    row.style.display = state.keyEditing ? 'flex' : 'none';
     if (status) {
       status.innerHTML =
         `🔑 已保存本机 Key（…${escapeHtml(key.slice(-4))}） · 模型 ${escapeHtml(getGeminiModel())} ` +
@@ -1055,7 +1074,7 @@ function updateChatKeyUI() {
     }
   } else {
     row.style.display = 'flex';
-    if (status) status.textContent = '尚未保存 Key：对话功能不可用，但「生成解卦提示」与复制功能照常使用。';
+    if (status) status.textContent = '尚未保存 Key：应用内对话不可用，可点「生成解卦提示」复制到外部 AI。';
   }
 }
 
@@ -1069,6 +1088,7 @@ function saveKeyFromInput() {
   if (key) setGeminiKey(key);
   setGeminiModel(modelInput.value);
   keyInput.value = '';
+  state.keyEditing = false;
 
   // Key / 模型变更后只重置服务端会话句柄，本地记录与对话保留
   chatState.previousInteractionId = '';
@@ -1087,6 +1107,7 @@ function clearGeminiKey() {
   setGeminiKey('');
   const keyInput = $('gemini-key');
   if (keyInput) keyInput.value = '';
+  state.keyEditing = false;
   chatState.previousInteractionId = '';
   chatState.transport = 'interactions';
   if (state.session && !state.session.ephemeral) {
@@ -1163,7 +1184,9 @@ function appendChatMessage(role, text, options = {}) {
 }
 
 function appendTyping() {
-  return appendChatMessage('pending', '思考中…');
+  const el = appendChatMessage('pending', '');
+  if (el) el.innerHTML = '<span class="typing-dots" aria-label="解卦中"><i></i><i></i><i></i></span>';
+  return el;
 }
 
 function autoGrow(el) {
@@ -1200,6 +1223,11 @@ function updateChatValidityUI() {
     sendBtn.hidden = expired;
     sendBtn.disabled = expired || chatState.busy;
   }
+  const composer = $('chat-composer');
+  if (composer) composer.hidden = expired;
+
+  const foot = $('chat-foot');
+  if (foot) foot.hidden = expired;
 
   const addFeedbackBtn = $('btn-add-feedback');
   if (addFeedbackBtn) {
@@ -1207,11 +1235,14 @@ function updateChatValidityUI() {
     addFeedbackBtn.textContent = state.feedbackOpen ? '收起反馈' : '记录反馈';
   }
 
+  const promptOut = $('prompt-output');
+  if (promptOut && expired) {
+    promptOut.hidden = true;
+    updatePromptToggleUI();
+  }
+
   const feedback = $('chat-feedback');
   if (feedback) feedback.hidden = !(expired || state.feedbackOpen);
-
-  const promptSection = $('prompt-section');
-  if (promptSection) promptSection.hidden = expired;
 
   const keyRow = $('chat-key-row');
   if (keyRow && expired) keyRow.style.display = 'none';
@@ -1440,7 +1471,8 @@ async function sendChatMessage() {
   chatState.busy = true;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '解卦中…';
+    btn.classList.add('is-busy');
+    btn.setAttribute('aria-label', '解卦中');
   }
   const typing = appendTyping();
 
@@ -1470,8 +1502,8 @@ async function sendChatMessage() {
   } finally {
     chatState.busy = false;
     if (btn) {
-      btn.textContent = '发送';
-      btn.classList.remove('loading');
+      btn.classList.remove('is-busy', 'loading');
+      btn.setAttribute('aria-label', '发送');
     }
     autoGrow(input);
     updateChatValidityUI();
@@ -1752,13 +1784,14 @@ function setupEvents() {
 
   // Prompt、分享、chat 设置、快捷回复
   document.addEventListener('click', (e) => {
-    if (e.target.closest('#btn-gen-prompt')) generatePrompt();
+    if (e.target.closest('#btn-toggle-prompt')) togglePromptOutput();
     if (e.target.closest('#btn-copy-prompt')) copyPrompt();
     if (e.target.closest('#btn-share-ai')) shareToGemini();
 
     if (e.target.closest('#btn-save-key')) saveKeyFromInput();
     if (e.target.closest('#btn-clear-key')) clearGeminiKey();
     if (e.target.closest('#btn-change-key')) {
+      state.keyEditing = true;
       const row = $('chat-key-row');
       if (row) row.style.display = 'flex';
       const input = $('gemini-key');
@@ -1788,7 +1821,7 @@ function setupEvents() {
       if (!getGeminiKey()) {
         const keyRow = $('chat-key-row');
         if (keyRow) keyRow.style.display = 'flex';
-        showToast('配置 Key 后即可对话，或生成解卦提示去外部 AI');
+        showToast('配置 Key 后即可对话；也可点「生成解卦提示」复制到外部 AI');
       } else {
         sendChatMessage();
       }
