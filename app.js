@@ -15,6 +15,8 @@ import { mountChatPanel } from './chat-panel.js';
 import { mountHistoryPanel } from './history-panel.js';
 import { showToast } from './ui-kit.js';
 import { requestGemini } from './gemini.js';
+import { buildReading } from './service.js';
+import { initVersionBadge } from './version-badge.js';
 
 // 会话记录、卦历、交流有效期与两个面板都在各自模块里。
 // app.js 只负责起卦流程、结果页编排与把模块接起来。
@@ -36,10 +38,15 @@ const geminiPort = {
 
 // ── 1. Data ───────────────────────────────────────────
 let DATA = null;
+let CANONICAL = null;
 
 async function loadData() {
-  const res = await fetch('data/iching.json');
-  DATA = await res.json();
+  const [ichingRes, canonicalRes] = await Promise.all([
+    fetch('data/iching.json'),
+    fetch('data/canonical.json'),
+  ]);
+  DATA = await ichingRes.json();
+  CANONICAL = await canonicalRes.json();
 }
 
 // ── 2. DOM shortcuts ──────────────────────────────────
@@ -60,6 +67,7 @@ const state = {
   numbers: [],
   primaryLineTypes: [],
   transformedLineTypes: [],
+  serviceReading: null,
   geminiAvailable: true,
 };
 
@@ -231,6 +239,11 @@ function showResult(options = {}) {
   const existing = options.session || null;
   const numbers = existing ? existing.numbers.slice() : state.throws.map((t) => t.num);
   const reading = deriveReading(numbers, DATA);
+  // 服务层的三层读卦：UI 只做展示，不重新解释卦象。
+  const serviceReading = buildReading(numbers, {
+    table: DATA,
+    canonicalData: CANONICAL,
+  });
 
   // Store hexagram data in state for prompt generation
   state.throws = numbers.map((n) => ({ num: n, ...LINE_INFO[n] }));
@@ -240,6 +253,7 @@ function showResult(options = {}) {
   state.numbers = numbers;
   state.primaryLineTypes = reading.primaryLineTypes;
   state.transformedLineTypes = reading.transformedLineTypes;
+  state.serviceReading = serviceReading;
 
   // 每次起卦都落成本地会话记录；回看旧记录时沿用原记录
   const session = existing || sessionStore.create(numbers, reading, {
@@ -282,6 +296,9 @@ function showResult(options = {}) {
   } else {
     container.appendChild(renderNoChangeNote());
   }
+
+  // ── 服务数据（试用 / 演示）：象数骨架、原典、客观象意 ──
+  container.appendChild(renderServiceDetails(serviceReading));
 
   // ── AI 解卦：应用内对话（自带 Key）+ 复制提示到外部 AI，同一个面板 ──
   chatPanel = mountChatPanel({
@@ -471,6 +488,79 @@ function renderNoChangeNote() {
   return div;
 }
 
+/**
+ * 试用 / 演示 UI：把服务层三层数据摊开给人看。
+ * 这里只陈列，不做个人化推演。
+ * @param {{ skeleton: any, text: any, imagery: any }} service
+ */
+function renderServiceDetails(service) {
+  const { skeleton, text, imagery } = service;
+  const primaryText = text.primary;
+  const primaryImage = imagery.primary;
+  const upper = primaryImage.trigrams.upper;
+  const lower = primaryImage.trigrams.lower;
+  const rule = skeleton.rule;
+
+  const targets = rule.targets
+    .map((target) => {
+      if (target.kind === 'judgment') {
+        return target.hexagram === 'primary' ? '本卦卦辞' : '变卦卦辞';
+      }
+      if (target.kind === 'special') return target.position;
+      const where = target.hexagram === 'primary' ? '本卦' : '变卦';
+      const role =
+        target.role === 'main' ? '（主）' : target.role === 'secondary' ? '（次）' : '';
+      return `${where}${target.position}${role}`;
+    })
+    .join('、');
+
+  const relationItems = primaryImage.lines
+    .map((line) => {
+      const tokens = [
+        line.position,
+        line.correct ? '当位' : '失位',
+        line.center ? '得中' : null,
+        `${line.response.label}${line.response.mutual ? `（${line.response.position}）` : ''}`,
+      ].filter(Boolean);
+      if (line.over && line.over.relation !== '同类') {
+        tokens.push(`下：${line.over.position} ${line.over.relation}`);
+      }
+      if (line.under && line.under.relation !== '同类') {
+        tokens.push(`上：${line.under.position} ${line.under.relation}`);
+      }
+      return `<li>${tokens.join(' · ')}</li>`;
+    })
+    .join('');
+
+  const details = document.createElement('details');
+  details.className = 'result-section service-details';
+  details.innerHTML = `
+    <summary>服务数据：象数 / 原典 / 象意</summary>
+    <div class="service-body">
+      <div class="service-row"><span class="service-key">互卦</span><span>${skeleton.nuclear.symbol} ${skeleton.nuclear.name}（第${skeleton.nuclear.id}卦）</span></div>
+      <div class="service-row"><span class="service-key">变爻规则</span><span>${rule.title} · ${rule.method}${targets ? ` 取象：${targets}` : ''}</span></div>
+      <div class="service-block">
+        <h3>彖传</h3>
+        <p>${primaryText.tuan}</p>
+      </div>
+      <div class="service-block">
+        <h3>大象</h3>
+        <p>${primaryText.image.great}</p>
+      </div>
+      <div class="service-block">
+        <h3>象意</h3>
+        <p>${primaryImage.formation} · ${primaryImage.naturalImage}；上卦 ${upper.name}（${upper.nature}/${upper.attribute}），下卦 ${lower.name}（${lower.nature}/${lower.attribute}）</p>
+        <p class="service-keywords">${primaryImage.keywords.join(' · ')}</p>
+      </div>
+      <div class="service-block">
+        <h3>爻位关系</h3>
+        <ul class="service-relations">${relationItems}</ul>
+      </div>
+    </div>
+  `;
+  return details;
+}
+
 function buildPromptText(questionRaw, options = {}) {
   const question = (questionRaw || '').trim() || '（未提供具体问题，请从卦象角度进行一般性解读）';
   const p = state.primary;
@@ -532,6 +622,49 @@ ${question}
 `;
     prompt += `下卦：${tTri.lowerSymbol} ${tTri.lowerName}（${tTri.lowerBin}）
 `;
+  }
+
+  // ── 互卦、变爻规则、原典、象意（服务层） ──
+  const service = state.serviceReading;
+  if (service) {
+    const { skeleton, text, imagery } = service;
+    prompt += `
+## 互卦：${skeleton.nuclear.symbol} ${skeleton.nuclear.name}（第${skeleton.nuclear.id}卦）
+`;
+    prompt += `
+### 变爻取象规则（${skeleton.rule.school}）
+${skeleton.rule.title}：${skeleton.rule.method}
+`;
+    prompt += `
+### 彖传（本卦）
+${text.primary.tuan}
+`;
+    prompt += `
+### 大象（本卦）
+${text.primary.image.great}
+`;
+    prompt += `
+### 客观象意（本卦）
+`;
+    prompt += `上卦：${imagery.primary.trigrams.upper.name}（${imagery.primary.trigrams.upper.nature}/${imagery.primary.trigrams.upper.attribute}）
+`;
+    prompt += `下卦：${imagery.primary.trigrams.lower.name}（${imagery.primary.trigrams.lower.nature}/${imagery.primary.trigrams.lower.attribute}）
+`;
+    prompt += `自然取象：${imagery.primary.naturalImage}；关键词：${imagery.primary.keywords.join('、')}
+`;
+    prompt += `
+### 爻位关系（本卦）
+`;
+    for (const line of imagery.primary.lines) {
+      const bits = [
+        line.position,
+        line.correct ? '当位' : '失位',
+        line.center ? '得中' : null,
+        line.response.label,
+      ].filter(Boolean);
+      prompt += `- ${bits.join(' · ')}
+`;
+    }
   }
 
   // 对话模式只需要卦象资料，不需要一次性的解卦指令
@@ -772,7 +905,7 @@ async function init() {
   }
 
   // Version badge (bottom-right corner)
-  initVersionBadge();
+  initVersionBadge(undefined, '周易起卦');
 }
 
 // 打开卦历里的一条记录：记录不在了就只提示，并重画列表
@@ -786,28 +919,7 @@ function openSessionById(id) {
   showResult({ session });
 }
 
-// ── 12. Version badge ────────────────────────────────
-// Reads version.json (generated at deploy time) and shows
-// the version in the bottom-right corner. Hidden when no
-// version.json exists (e.g. local dev).
-async function initVersionBadge() {
-  const el = $('version-badge');
-  if (!el) return;
-  try {
-    const res = await fetch('version.json');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const v = await res.json();
-    el.textContent = `v${v.version} · ${v.commit}`;
-    el.title = [
-      `周易起卦 v${v.version}`,
-      `Git: ${v.describe}`,
-      v.branch ? `分支: ${v.branch}` : null,
-      `构建时间: ${v.buildTime}`,
-    ].filter(Boolean).join('\n');
-  } catch {
-    el.style.display = 'none';
-  }
-}
+// 版本徽标在 version-badge.js（首页与演示页共用）。
 
 init();
 

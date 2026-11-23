@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>周易起卦 · 演示</title>
+  <meta name="description" content="周易象数服务的演示页：摇六次硬币，查看本卦、变卦、动爻、卦辞爻辞与服务三层数据。">
+  <meta name="theme-color" content="#292524">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="header-actions header-actions-left">
+        <a id="btn-home" class="header-btn" href="/" title="返回服务首页" aria-label="返回服务首页">←</a>
+      </div>
+      <h1>周易起卦</h1>
+      <div class="header-actions">
+        <button id="btn-history" class="header-btn" title="卦历 · 本机解卦记录" aria-label="卦历">卦</button>
+        <button id="btn-refresh" class="refresh-btn hidden" title="强制刷新（从服务器获取最新内容）" aria-label="强制刷新">⟳</button>
+      </div>
+    </header>
+
+    <p class="demo-note">
+      演示 · 三层数据摊开给你看
+      <a href="/#api">API</a>
+      <a href="/#webmcp">WebMCP</a>
+    </p>
+
+    <main id="main">
+      <!-- ── Idle Phase ── -->
+      <section id="phase-idle" class="phase active">
+        <div class="hero">
+          <div id="domain-display" class="domain-display">
+            <div class="domain-number">164839</div>
+            <div id="domain-hexagram" class="domain-hexagram"></div>
+            <div id="domain-name" class="domain-name"></div>
+          </div>
+          <p class="hero-text">以三枚硬币<br>起六爻之卦</p>
+          <button id="btn-start" class="btn-primary">起卦</button>
+        </div>
+      </section>
+
+      <!-- ── Casting Phase ── -->
+      <section id="phase-casting" class="phase">
+        <div class="throw-header">
+          <span id="throw-count">第 1 / 6 次</span>
+        </div>
+
+        <div id="coin-result" class="coin-result">
+          <div class="coins-row">
+            <div class="coin" data-index="0"><span class="coin-face">—</span></div>
+            <div class="coin" data-index="1"><span class="coin-face">—</span></div>
+            <div class="coin" data-index="2"><span class="coin-face">—</span></div>
+          </div>
+          <div class="coin-sum">
+            <span id="coin-num" class="coin-num">—</span>
+          </div>
+        </div>
+
+        <div id="hexagram-build" class="hexagram-display">
+          <div class="hexagram-line placeholder" data-index="0"></div>
+          <div class="hexagram-line placeholder" data-index="1"></div>
+          <div class="hexagram-line placeholder" data-index="2"></div>
+          <div class="hexagram-line placeholder" data-index="3"></div>
+          <div class="hexagram-line placeholder" data-index="4"></div>
+          <div class="hexagram-line placeholder" data-index="5"></div>
+        </div>
+
+        <button id="btn-throw" class="btn-primary">摇卦</button>
+        <p id="throw-hint" class="hint-text">点击摇卦，掷三枚硬币</p>
+      </section>
+
+      <!-- ── Result Phase ── -->
+      <section id="phase-result" class="phase">
+        <div id="result-content"></div>
+        <button id="btn-reset" class="btn-secondary">重新起卦</button>
+      </section>
+    </main>
+  </div>
+
+  <footer id="version-badge" class="version-badge" title="版本信息"></footer>
+
+  <script type="module" src="app.js"></script>
+  <script type="module" src="webmcp.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js');
+      });
+    }
+  </script>
+</body>
+</html>

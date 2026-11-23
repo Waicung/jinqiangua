@@ -1,13 +1,15 @@
 {
   "name": "jinqiangua",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "test": "bun test",
+    "data": "bun scripts/parse-zhouyi.js && bun scripts/build-canonical.mjs",
+    "build:canonical": "bun scripts/build-canonical.mjs",
     "version": "bun run scripts/version.mjs",
     "predeploy": "bun run scripts/version.mjs",
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev --persist-to /tmp/jinqiangua-dev"
   },
   "devDependencies": {
     "@types/bun": "latest",

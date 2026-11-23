@@ -1,7 +1,7 @@
 {
   "name": "周易起卦",
   "short_name": "周易起卦",
-  "description": "离线可用的金钱卦起卦应用。三枚硬币，六爻成卦。",
+  "description": "金钱卦的象数服务：可离线的起卦演示、HTTP API 与 WebMCP 工具。",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#fafaf9",

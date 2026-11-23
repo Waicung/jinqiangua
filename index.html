@@ -2,77 +2,266 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>周易起卦</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>周易象数服务 — 起卦 API 与 WebMCP</title>
+  <meta name="description" content="金钱卦的象数服务：离线可用的起卦演示、只返回象数骨架 / 原典文本 / 客观象意的 HTTP API，以及浏览器内直接调用的 WebMCP 工具。">
   <meta name="theme-color" content="#292524">
   <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="app">
-    <header id="header">
-      <h1>周易起卦</h1>
-      <div class="header-actions">
-        <button id="btn-history" class="header-btn" title="卦历 · 本机解卦记录" aria-label="卦历">卦</button>
-        <button id="btn-refresh" class="refresh-btn hidden" title="强制刷新（从服务器获取最新内容）" aria-label="强制刷新">⟳</button>
-      </div>
+  <div id="landing">
+    <header class="site-header">
+      <a class="brand" href="/">
+        <span class="brand-mark" aria-hidden="true">易</span>
+        <span class="brand-text">周易象数服务</span>
+      </a>
+      <nav class="site-nav" aria-label="页面导航">
+        <a href="#outlets">出口</a>
+        <a href="#layers">边界</a>
+        <a href="#api">API</a>
+        <a href="#webmcp">WebMCP</a>
+        <a class="nav-demo" href="demo">演示 →</a>
+      </nav>
     </header>
 
     <main id="main">
-      <!-- ── Idle Phase ── -->
-      <section id="phase-idle" class="phase active">
-        <div class="hero">
-          <div id="domain-display" class="domain-display">
-            <div class="domain-number">164839</div>
-            <div id="domain-hexagram" class="domain-hexagram"></div>
-            <div id="domain-name" class="domain-name"></div>
-          </div>
-          <p class="hero-text">以三枚硬币<br>起六爻之卦</p>
-          <button id="btn-start" class="btn-primary">起卦</button>
+      <!-- ── Hero ── -->
+      <section class="hero-section">
+        <p class="hero-kicker">金钱卦 · 象数服务</p>
+        <h1 class="hero-title">
+          三枚硬币，六爻成卦。<br>
+          <span class="hero-accent">象数归服务，解读归你。</span>
+        </h1>
+        <p class="hero-lead">
+          一套只返回象数骨架、原典文本与客观象意的服务。可离线的起卦演示、给脚本和
+          Agent 调用的 HTTP API、浏览器内直接挂载的 WebMCP 工具，三条出口共用同一个内核。
+        </p>
+        <div class="hero-actions">
+          <a class="btn-primary" href="demo">进入演示</a>
+          <a class="btn-secondary" href="#api">查看 API</a>
+        </div>
+        <ul class="hero-stats">
+          <li><strong>64</strong><span>六十四卦</span></li>
+          <li><strong>3</strong><span>层数据</span></li>
+          <li><strong>6</strong><span>HTTP 端点</span></li>
+          <li><strong>4</strong><span>WebMCP 工具</span></li>
+        </ul>
+      </section>
+
+      <!-- ── 三个出口 ── -->
+      <section id="outlets" class="doc-section">
+        <div class="section-head">
+          <h2>三个出口，一个内核</h2>
+          <p>同一次起卦，三种用法。演示页给人看，API 给脚本，WebMCP 给浏览器内的 agent。</p>
+        </div>
+        <div class="outlet-grid">
+          <article class="outlet-card">
+            <p class="outlet-label">演示 UI</p>
+            <h3>亲自摇一卦</h3>
+            <p>六次投掷三枚硬币，得到本卦、变卦、动爻、卦辞爻辞与解卦面板。可离线使用，记录留在本机。</p>
+            <a class="outlet-link" href="demo">/demo</a>
+          </article>
+          <article class="outlet-card">
+            <p class="outlet-label">HTTP API</p>
+            <h3>给脚本和 Agent</h3>
+            <p><code>POST /api/v1/cast</code> 随机起卦，<code>POST /api/v1/readings</code> 按爻值读卦，统一返回 <code>{ ok, data }</code>。</p>
+            <a class="outlet-link" href="#api">/api/v1</a>
+          </article>
+          <article class="outlet-card">
+            <p class="outlet-label">WebMCP</p>
+            <h3>浏览器内直调</h3>
+            <p>页面在 <code>navigator.modelContext</code> 注册四个工具，agent 无需额外服务即可起卦、读卦、取原典。</p>
+            <a class="outlet-link" href="#webmcp">navigator.modelContext</a>
+          </article>
         </div>
       </section>
 
-      <!-- ── Casting Phase ── -->
-      <section id="phase-casting" class="phase">
-        <div class="throw-header">
-          <span id="throw-count">第 1 / 6 次</span>
+      <!-- ── 三层边界 ── -->
+      <section id="layers" class="doc-section">
+        <div class="section-head">
+          <h2>服务只做三层</h2>
+          <p>越界的内容留给会话层与上层 AI。API 响应里没有 <code>expiresAt</code>、<code>advice</code> 这类字段。</p>
         </div>
-
-        <div id="coin-result" class="coin-result">
-          <div class="coins-row">
-            <div class="coin" data-index="0"><span class="coin-face">—</span></div>
-            <div class="coin" data-index="1"><span class="coin-face">—</span></div>
-            <div class="coin" data-index="2"><span class="coin-face">—</span></div>
-          </div>
-          <div class="coin-sum">
-            <span id="coin-num" class="coin-num">—</span>
-          </div>
+        <div class="layer-grid">
+          <article class="layer-card">
+            <h3>象数骨架</h3>
+            <p class="layer-include">六爻原始值（6/7/8/9）、本卦、变卦、互卦、动爻位置与数量、朱熹变爻取象规则。</p>
+            <p class="layer-exclude"><strong>不包含</strong> 有效期、能否重占等状态判断。</p>
+          </article>
+          <article class="layer-card">
+            <h3>原典文本</h3>
+            <p class="layer-include">卦辞、爻辞、彖传、象传（大象 + 小象）原文，按底本寻址，当前为通行本。</p>
+            <p class="layer-exclude"><strong>不包含</strong> 白话译文、个人处境的安慰话。</p>
+          </article>
+          <article class="layer-card">
+            <h3>客观象意</h3>
+            <p class="layer-include">八卦自然属性与核心意象、爻位关系（当位、得中、应与、承乘）。</p>
+            <p class="layer-exclude"><strong>不包含</strong> 行业 / 感情 / 财务的定制化推演与吉凶断言。</p>
+          </article>
         </div>
-
-        <div id="hexagram-build" class="hexagram-display">
-          <div class="hexagram-line placeholder" data-index="0"></div>
-          <div class="hexagram-line placeholder" data-index="1"></div>
-          <div class="hexagram-line placeholder" data-index="2"></div>
-          <div class="hexagram-line placeholder" data-index="3"></div>
-          <div class="hexagram-line placeholder" data-index="4"></div>
-          <div class="hexagram-line placeholder" data-index="5"></div>
-        </div>
-
-        <button id="btn-throw" class="btn-primary">摇卦</button>
-        <p id="throw-hint" class="hint-text">点击摇卦，掷三枚硬币</p>
       </section>
 
-      <!-- ── Result Phase ── -->
-      <section id="phase-result" class="phase">
-        <div id="result-content"></div>
-        <button id="btn-reset" class="btn-secondary">重新起卦</button>
+      <!-- ── HTTP API ── -->
+      <section id="api" class="doc-section">
+        <div class="section-head">
+          <h2>HTTP API</h2>
+          <p>Base URL <code>/api/v1</code>，全部响应带 CORS。成功为 <code>{ ok: true, data }</code>，失败为 <code>{ ok: false, error: { code, message } }</code>。</p>
+        </div>
+
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GET</code></td><td><code>/api/v1</code></td><td>服务自述：三层、排除边界、底本、八卦字典</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/v1/health</code></td><td>健康检查</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/v1/hexagrams</code></td><td>六十四卦索引</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/v1/hexagrams/:id</code></td><td>单卦：原典 + 象意</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/v1/readings</code></td><td>六个 6–9 的爻值 → 三层读卦</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/v1/cast</code></td><td>随机起卦 → 六爻值 + 三层读卦</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="example">
+          <div class="example-head">
+            <span>随机起卦</span>
+            <button class="copy-btn" type="button" data-copy="ex-cast">复制</button>
+          </div>
+          <pre><code id="ex-cast">curl -X POST https://651372.xyz/api/v1/cast \
+  -H 'content-type: application/json' \
+  -d '{}'</code></pre>
+        </div>
+
+        <div class="example">
+          <div class="example-head">
+            <span>按六爻值读卦（6=老阴 7=少阳 8=少阴 9=老阳，自下而上）</span>
+            <button class="copy-btn" type="button" data-copy="ex-readings">复制</button>
+          </div>
+          <pre><code id="ex-readings">curl -X POST https://651372.xyz/api/v1/readings \
+  -H 'content-type: application/json' \
+  -d '{"numbers":[6,7,8,9,7,8],"edition":"通行本"}'</code></pre>
+        </div>
+
+        <div class="example">
+          <div class="example-head">
+            <span>响应结构</span>
+            <button class="copy-btn" type="button" data-copy="ex-response">复制</button>
+          </div>
+          <pre><code id="ex-response">{
+  "ok": true,
+  "data": {
+    "schema": "zhouyi.reading/v1",
+    "skeleton": { "numbers": [], "lines": [], "primary": {}, "transformed": {}, "nuclear": {}, "moving": {}, "rule": {} },
+    "text":     { "edition": {}, "primary": {}, "transformed": {}, "nuclear": {} },
+    "imagery":  { "primary": {}, "transformed": {}, "nuclear": {} }
+  }
+}</code></pre>
+        </div>
+
+        <div class="try-card">
+          <div class="try-head">
+            <h3>在线试一下</h3>
+            <p>请求直接发往本站的 <code>/api/v1</code>，返回三层数据。</p>
+          </div>
+          <div class="try-controls">
+            <label class="try-input-wrap">
+              <span>六爻值</span>
+              <input id="try-numbers" value="6,7,8,9,7,8" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="六个 6–9 的爻值">
+            </label>
+            <button id="try-read" class="btn-ghost" type="button">读这一卦</button>
+            <button id="try-cast" class="btn-ghost" type="button">随机起卦</button>
+          </div>
+          <p id="try-status" class="try-status" role="status" aria-live="polite"></p>
+          <div id="try-result" class="try-result" hidden>
+            <p id="try-summary" class="try-summary"></p>
+            <pre><code id="try-output"></code></pre>
+          </div>
+        </div>
+
+        <p class="doc-foot">
+          错误码：<code>invalid_numbers</code>、<code>unknown_edition</code>、<code>hexagram_not_found</code>、
+          <code>method_not_allowed</code>、<code>internal_error</code>。完整字段说明随服务仓库的
+          <code>docs/SERVICE.md</code> 维护。
+        </p>
+      </section>
+
+      <!-- ── WebMCP ── -->
+      <section id="webmcp" class="doc-section">
+        <div class="section-head">
+          <h2>WebMCP</h2>
+          <p>
+            <code>webmcp.js</code> 在支持 WebMCP 的浏览器里把起卦能力挂到
+            <code>navigator.modelContext</code>，agent 不必知道 API 路径，直接选工具即可。
+          </p>
+        </div>
+
+        <p id="webmcp-status" class="mcp-status">检测 WebMCP 支持…</p>
+
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr><th>工具</th><th>作用</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>zhouyi_cast</code></td><td>随机起卦</td></tr>
+              <tr><td><code>zhouyi_read</code></td><td>按六个 6–9 的爻值读卦</td></tr>
+              <tr><td><code>zhouyi_hexagram</code></td><td>按 1–64 卦号取原典与象意</td></tr>
+              <tr><td><code>zhouyi_list_hexagrams</code></td><td>六十四卦索引</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="example">
+          <div class="example-head">
+            <span>页面注册后的调用形态</span>
+            <button class="copy-btn" type="button" data-copy="ex-mcp">复制</button>
+          </div>
+          <pre><code id="ex-mcp">// 页面加载时自动注册（webmcp.js）
+import './webmcp.js';
+
+// agent 侧按名字选工具，参数与 API 一致
+zhouyi_cast({ edition: '通行本' });
+zhouyi_read({ numbers: [6, 7, 8, 9, 7, 8] });
+zhouyi_hexagram({ id: 1 });
+zhouyi_list_hexagrams({});</code></pre>
+        </div>
+
+        <p class="doc-foot">
+          工具走同一个 <code>/api/v1</code>，返回内容同样只有三层——不含有效期，也不含个人化断语。
+          未支持 WebMCP 的浏览器会安静跳过注册，页面其余功能不受影响。
+        </p>
+      </section>
+
+      <!-- ── 演示入口 ── -->
+      <section class="demo-cta">
+        <p class="demo-cta-kicker">演示</p>
+        <h2>先亲手摇一卦，再决定要不要接 API。</h2>
+        <p>演示页保留完整的摇卦、本卦 / 变卦、爻辞、服务数据与解卦面板，也可从卦历回看本机记录。</p>
+        <div class="demo-cta-actions">
+          <a class="btn-primary" href="demo">进入演示</a>
+          <a class="btn-secondary" href="/api/v1">查看服务自述</a>
+        </div>
       </section>
     </main>
+
+    <footer class="site-footer">
+      <p>周易象数服务 · schema <code>zhouyi.reading/v1</code></p>
+      <nav aria-label="页脚导航">
+        <a href="demo">演示</a>
+        <a href="#api">API</a>
+        <a href="#webmcp">WebMCP</a>
+        <a href="/api/v1">/api/v1</a>
+      </nav>
+    </footer>
   </div>
 
   <footer id="version-badge" class="version-badge" title="版本信息"></footer>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="landing.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

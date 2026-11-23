@@ -2,7 +2,7 @@
    周易起卦 — Service Worker (Cache-First)
    ====================================================== */
 
-const CACHE_NAME = 'jinqiangua-v10';
+const CACHE_NAME = 'jinqiangua-v12';
 
 // Only http(s) requests can be stored in the Cache API.
 // Requests injected by browser extensions (chrome-extension://, …)
@@ -28,9 +28,16 @@ const safePut = (request, response) => {
 const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/demo',
   '/style.css',
   '/app.js',
+  '/landing.js',
+  '/version-badge.js',
   '/hexagram.js',
+  '/canonical.js',
+  '/imagery.js',
+  '/service.js',
+  '/webmcp.js',
   '/session.js',
   '/ui-kit.js',
   '/gemini.js',
@@ -41,6 +48,7 @@ const STATIC_ASSETS = [
   '/icons/icon-192.svg',
   '/icons/icon-512.svg',
   '/data/iching.json',
+  '/data/canonical.json',
 ];
 
 // ── Install: pre-cache all static assets ──────────────
@@ -86,6 +94,9 @@ self.addEventListener('fetch', (event) => {
   // Ignore anything outside the Cache API's supported schemes
   // (chrome-extension:// etc. injected by extensions, data:, blob:, …)
   if (!isCacheableScheme(url)) return;
+
+  // API 永远走网络：服务端数据比离线缓存新，且 UI 自身可离线计算。
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
 
   if (url.pathname === '/version.json') {
     event.respondWith(

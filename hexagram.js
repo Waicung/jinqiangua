@@ -30,6 +30,7 @@
  * @property {string} lowerTrigram
  * @property {string} upperTrigram
  * @property {HexagramLine[]} lines
+ * @property {{ position: string, text: string }[]} [specialLines]
  */
 
 /**
@@ -63,6 +64,25 @@
  * @property {MovingLine[]} movingLines
  * @property {LineType[]} primaryLineTypes
  * @property {LineType[]} transformedLineTypes
+ */
+
+/**
+ * @typedef {object} RuleTarget
+ * @property {'judgment'|'line'|'special'} kind
+ * @property {'primary'|'transformed'} hexagram
+ * @property {number} [index]
+ * @property {string} [position]
+ * @property {'main'|'secondary'} [role]
+ */
+
+/**
+ * @typedef {object} ChangeRule
+ * @property {string} id
+ * @property {string} title
+ * @property {number} movingCount
+ * @property {string} method
+ * @property {string} school
+ * @property {RuleTarget[]} targets
  */
 
 /**
@@ -143,6 +163,162 @@ export function hexagramFor(binary, table) {
  */
 export function hexagramById(id, table) {
   return table.hexagrams.find((h) => h.id === id);
+}
+
+/**
+ * 互卦：取本卦二、三、四爻为下卦，三、四、五爻为上卦。
+ * @param {string} binary
+ * @param {HexagramTable} table
+ * @returns {Hexagram}
+ */
+export function nuclearHexagram(binary, table) {
+  if (!/^[01]{6}$/.test(binary)) {
+    throw new RangeError(`binary 必须是六位 0/1：${binary}`);
+  }
+  const nuclearBinary = binary.charAt(1) + binary.charAt(2) + binary.charAt(3) +
+    binary.charAt(2) + binary.charAt(3) + binary.charAt(4);
+  return hexagramFor(nuclearBinary, table);
+}
+
+/**
+ * 变爻取象规则（朱熹《易学启蒙·考变占》）。
+ * 只给出“读哪一条原文”的规则与目标位置，不给吉凶判断。
+ * @param {Reading} reading
+ * @returns {ChangeRule}
+ */
+export function changeRule(reading) {
+  const movingIndices = reading.movingLines.map((line) => line.index);
+  const movingCount = movingIndices.length;
+  const stillIndices = [0, 1, 2, 3, 4, 5].filter(
+    (index) => !movingIndices.includes(index)
+  );
+
+  /**
+   * @param {'primary'|'transformed'} hexagram
+   * @param {number} index
+   * @param {'main'|'secondary'|undefined} [role]
+   * @returns {RuleTarget}
+   */
+  const lineTarget = (hexagram, index, role) => {
+    const types =
+      hexagram === 'primary'
+        ? reading.primaryLineTypes
+        : reading.transformedLineTypes;
+    return {
+      kind: 'line',
+      hexagram,
+      index,
+      position: posLabel(index, types[index] === 'yang'),
+      ...(role ? { role } : {}),
+    };
+  };
+
+  /** @type {ChangeRule} */
+  const base = {
+    id: 'no-moving',
+    title: '静卦',
+    movingCount,
+    method: '以本卦卦辞占。',
+    school: '朱熹《易学启蒙·考变占》',
+    targets: [{ kind: 'judgment', hexagram: 'primary' }],
+  };
+
+  if (movingCount === 1) {
+    const index = movingIndices[0];
+    if (index === undefined) return base;
+    return {
+      ...base,
+      id: 'one-moving',
+      title: '一爻动',
+      method: '以本卦动爻爻辞占。',
+      targets: [lineTarget('primary', index)],
+    };
+  }
+
+  if (movingCount === 2) {
+    const lower = movingIndices[0];
+    const upper = movingIndices[1];
+    if (lower === undefined || upper === undefined) return base;
+    return {
+      ...base,
+      id: 'two-moving',
+      title: '二爻动',
+      method: '以本卦两动爻爻辞占，以上爻为主。',
+      targets: [
+        lineTarget('primary', upper, 'main'),
+        lineTarget('primary', lower, 'secondary'),
+      ],
+    };
+  }
+
+  if (movingCount === 3) {
+    return {
+      ...base,
+      id: 'three-moving',
+      title: '三爻动',
+      method: '以本卦与变卦卦辞占，本卦为主。',
+      targets: [
+        { kind: 'judgment', hexagram: 'primary', role: 'main' },
+        { kind: 'judgment', hexagram: 'transformed', role: 'secondary' },
+      ],
+    };
+  }
+
+  if (movingCount === 4) {
+    const lower = stillIndices[0];
+    const upper = stillIndices[1];
+    if (lower === undefined || upper === undefined) return base;
+    return {
+      ...base,
+      id: 'four-moving',
+      title: '四爻动',
+      method: '以变卦两不变爻爻辞占，以下爻为主。',
+      targets: [
+        lineTarget('transformed', lower, 'main'),
+        lineTarget('transformed', upper, 'secondary'),
+      ],
+    };
+  }
+
+  if (movingCount === 5) {
+    const index = stillIndices[0];
+    if (index === undefined) return base;
+    return {
+      ...base,
+      id: 'five-moving',
+      title: '五爻动',
+      method: '以变卦不变爻爻辞占。',
+      targets: [lineTarget('transformed', index)],
+    };
+  }
+
+  if (movingCount === 6) {
+    const special = reading.primary.specialLines?.[0];
+    if (special) {
+      return {
+        ...base,
+        id: 'six-moving',
+        title: '六爻动',
+        method: `六爻皆动，以${special.position}爻辞占。`,
+        targets: [
+          {
+            kind: 'special',
+            hexagram: 'primary',
+            position: special.position,
+          },
+        ],
+      };
+    }
+    return {
+      ...base,
+      id: 'six-moving',
+      title: '六爻动',
+      method: '六爻皆动，以变卦卦辞占。',
+      targets: [{ kind: 'judgment', hexagram: 'transformed' }],
+    };
+  }
+
+  return base;
 }
 
 /**
