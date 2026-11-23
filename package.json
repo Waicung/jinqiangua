@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "test": "bun test",
     "version": "bun run scripts/version.mjs",
     "predeploy": "bun run scripts/version.mjs",
     "deploy": "wrangler deploy",

@@ -2,6 +2,15 @@
    周易起卦 — app.js
    ====================================================== */
 
+import {
+  LINE_INFO,
+  deriveReading,
+  hexagramById,
+  hexagramFor,
+  posLabel,
+  trigramInfo,
+} from './hexagram.js';
+
 // ── 1. Data ───────────────────────────────────────────
 let DATA = null;
 
@@ -13,28 +22,7 @@ async function loadData() {
 // ── 2. DOM shortcuts ──────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
-// ── 3. Constants ──────────────────────────────────────
-const LINE_INFO = {
-  6: { name: '老阴', yang: false, moving: true,  symbol: '⚋' },
-  7: { name: '少阳', yang: true,  moving: false, symbol: '⚊' },
-  8: { name: '少阴', yang: false, moving: false, symbol: '⚋' },
-  9: { name: '老阳', yang: true,  moving: true,  symbol: '⚊' },
-};
-
-const POSITION_NAMES = ['初', '二', '三', '四', '五', '上'];
-
-const TRIGRAM_SYMBOLS = {
-  '111': '☰', '110': '☱', '101': '☲', '100': '☳',
-  '011': '☴', '010': '☵', '001': '☶', '000': '☷',
-};
-
-function posLabel(index, isYang) {
-  // index 0-5 (bottom to top)
-  const yao = isYang ? '九' : '六';
-  if (index === 0) return `初${yao}`;
-  if (index === 5) return `上${yao}`;
-  return `${yao}${POSITION_NAMES[index]}`;
-}
+// 卦象常量、查卦与 deriveReading 在 hexagram.js。
 
 // ── 4. State ──────────────────────────────────────────
 const state = {
@@ -93,45 +81,6 @@ function tossCoins() {
   const coin = () => (Math.random() < 0.5 ? 3 : 2);
   const values = [coin(), coin(), coin()];
   return { values, sum: values[0] + values[1] + values[2] };
-}
-
-function getPrimaryHexagram(binary) {
-  const lower = binary.slice(0, 3);
-  const upper = binary.slice(3, 6);
-  const key = `${upper}:${lower}`;
-  const id = DATA.trigramLookup[key];
-  return DATA.hexagrams.find((h) => h.id === id);
-}
-
-function getTransformedHexagram(numbers) {
-  // Flip bits where num is 6 (old yin → yang) or 9 (old yang → yin)
-  const binary = numbers
-    .map((n) => (n === 7 || n === 9 ? '1' : '0'))
-    .join('');
-
-  const transformed = binary.split('').map((bit, i) => {
-    if (numbers[i] === 6) return '1';
-    if (numbers[i] === 9) return '0';
-    return bit;
-  }).join('');
-
-  const lower = transformed.slice(0, 3);
-  const upper = transformed.slice(3, 6);
-  const key = `${upper}:${lower}`;
-  const id = DATA.trigramLookup[key];
-  return DATA.hexagrams.find((h) => h.id === id);
-}
-
-function getMovingLines(primary, numbers) {
-  const movingIndices = [];
-  numbers.forEach((n, i) => {
-    if (n === 6 || n === 9) movingIndices.push(i);
-  });
-  return movingIndices.map((idx) => ({
-    index: idx,
-    ...primary.lines[idx],
-    position: posLabel(idx, numbers[idx] === 7 || numbers[idx] === 9),
-  }));
 }
 
 // ── 6. Phase transitions ──────────────────────────────
@@ -260,29 +209,11 @@ function addBuildLine(index, info) {
 }
 
 // ── 9. Result rendering ──────────────────────────────
-// 从六个和值算出完整卦象资料（本卦 / 变卦 / 动爻 / 爻性）
-function computeReading(numbers) {
-  const binary = numbers.map((n) => (n === 7 || n === 9 ? '1' : '0')).join('');
-  const primary = getPrimaryHexagram(binary);
-  const transformed = getTransformedHexagram(numbers);
-  const movingLines = getMovingLines(primary, numbers);
-
-  const primaryLineTypes = numbers.map((n) => (n === 7 || n === 9 ? 'yang' : 'yin'));
-  const transformedBits = binary.split('').map((bit, i) => {
-    if (numbers[i] === 6) return '1';
-    if (numbers[i] === 9) return '0';
-    return bit;
-  });
-  const transformedLineTypes = transformedBits.map((b) => (b === '1' ? 'yang' : 'yin'));
-
-  return { numbers, binary, primary, transformed, movingLines, primaryLineTypes, transformedLineTypes };
-}
-
 // options.session：回看一条本地记录；不传则新建一次起卦记录
 function showResult(options = {}) {
   const existing = options.session || null;
   const numbers = existing ? existing.numbers.slice() : state.throws.map((t) => t.num);
-  const reading = computeReading(numbers);
+  const reading = deriveReading(numbers, DATA);
 
   // Store hexagram data in state for prompt generation
   state.throws = numbers.map((n) => ({ num: n, ...LINE_INFO[n] }));
@@ -569,20 +500,6 @@ function updatePromptToggleUI() {
   btn.classList.toggle('active', open);
 }
 
-function trigramInfo(binary) {
-  const lower = binary.slice(0, 3);
-  const upper = binary.slice(3, 6);
-  const names = DATA.trigramNames;
-  return {
-    lowerBin: lower,
-    upperBin: upper,
-    lowerName: names[lower],
-    upperName: names[upper],
-    lowerSymbol: TRIGRAM_SYMBOLS[lower],
-    upperSymbol: TRIGRAM_SYMBOLS[upper],
-  };
-}
-
 function buildPromptText(questionRaw, options = {}) {
   const question = (questionRaw || '').trim() || '（未提供具体问题，请从卦象角度进行一般性解读）';
   const p = state.primary;
@@ -591,7 +508,7 @@ function buildPromptText(questionRaw, options = {}) {
   const nums = state.numbers;
   const lineTypes = state.primaryLineTypes;
 
-  const pTri = trigramInfo(p.binary);
+  const pTri = trigramInfo(p.binary, DATA);
 
   let prompt = `# 周易起卦 — 解卦请求
 
@@ -634,7 +551,7 @@ ${question}
     });
 
     // ── 变卦 ──
-    const tTri = trigramInfo(t.binary);
+    const tTri = trigramInfo(t.binary, DATA);
     prompt += `
 ## 变卦：${t.symbol} ${t.name}（第${t.id}卦）
 `;
@@ -1631,11 +1548,7 @@ const DOMAIN_DIGITS = [1, 6, 4, 8, 3, 9];
 function getDomainHexagram() {
   // Even → yin (0), odd → yang (1), from bottom to top
   const binary = DOMAIN_DIGITS.map((d) => (d % 2 === 0 ? '0' : '1')).join('');
-  const lower = binary.slice(0, 3);
-  const upper = binary.slice(3, 6);
-  const key = upper + ':' + lower;
-  const id = DATA.trigramLookup[key];
-  return DATA.hexagrams.find((h) => h.id === id);
+  return hexagramFor(binary, DATA);
 }
 
 function renderDomainHexagram() {
@@ -1695,8 +1608,8 @@ function renderHistoryList() {
   }
 
   listEl.innerHTML = sessions.map((session) => {
-    const p = DATA.hexagrams.find((h) => h.id === session.primaryId);
-    const t = DATA.hexagrams.find((h) => h.id === session.transformedId);
+    const p = hexagramById(session.primaryId, DATA);
+    const t = hexagramById(session.transformedId, DATA);
     const moving = (session.movingIndices || []).length;
     const expired = isSessionExpired(session);
     const rounds = (session.messages || []).filter((m) => !m.kind && m.role === 'user').length;

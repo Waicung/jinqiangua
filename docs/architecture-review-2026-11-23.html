@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — 651372.xyz / 周易起卦</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); color: #f8fafc; }
+      .label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #78716c; }
+      .chip { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+      .fade { opacity: .35; }
+      .hair { background-image: repeating-linear-gradient(90deg, #e7e5e4 0 1px, transparent 1px 8px); }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans antialiased">
+    <main class="max-w-6xl mx-auto px-6 py-14 space-y-14">
+      <div class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+        <strong>Snapshot, 2026-11-23.</strong> Generated before candidate #1 was implemented.
+        Candidate #1 (卦象 module) is now done — see <code class="font-mono">docs/HANDOFF.md</code>.
+        The header stats below describe the pre-change state; the candidate analysis still applies to #2–#5.
+      </div>
+      <!-- ── Header ─────────────────────────────────────── -->
+      <header class="space-y-6">
+        <div class="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p class="label mb-2">Architecture review</p>
+            <h1 class="font-serif text-4xl md:text-5xl tracking-tight">651372.xyz — 周易起卦</h1>
+            <p class="mt-2 text-sm text-stone-500 font-mono">main · a72b84b · 2026-11-23</p>
+          </div>
+          <div class="text-xs text-stone-500 leading-relaxed">
+            <div><span class="inline-block h-3 w-6 align-middle border border-stone-400 bg-white"></span> module</div>
+            <div><span class="inline-block h-0 w-6 align-middle border-t border-dashed border-stone-500"></span> seam</div>
+            <div><span class="inline-block h-3 w-6 align-middle bg-red-600"></span> leakage</div>
+            <div><span class="inline-block h-3 w-6 align-middle deep"></span> deep module</div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-px bg-stone-200 border border-stone-200 rounded-lg overflow-hidden text-center">
+          <div class="bg-white px-3 py-4"><div class="font-serif text-2xl">1,918</div><div class="label mt-1">lines · app.js</div></div>
+          <div class="bg-white px-3 py-4"><div class="font-serif text-2xl">0</div><div class="label mt-1">tests</div></div>
+          <div class="bg-white px-3 py-4"><div class="font-serif text-2xl">41</div><div class="label mt-1">element ids</div></div>
+          <div class="bg-white px-3 py-4"><div class="font-serif text-2xl">12</div><div class="label mt-1">交流有效期 checks</div></div>
+          <div class="bg-white px-3 py-4"><div class="font-serif text-2xl">80</div><div class="label mt-1">state. refs</div></div>
+          <div class="bg-white px-3 py-4"><div class="font-serif text-2xl">3</div><div class="label mt-1">homes per 会话</div></div>
+        </div>
+
+        <p class="text-xs text-stone-500">
+          Domain terms from <code class="font-mono">CONTEXT.md</code>. No <code class="font-mono">GLOSSARY.md</code> and no ADRs exist yet, so nothing here is constrained by a recorded decision.
+        </p>
+      </header>
+
+      <section id="candidates" class="space-y-10">
+
+        <!-- ══════════════════════════════════════════════ -->
+        <!-- Candidate 1                                  -->
+        <!-- ══════════════════════════════════════════════ -->
+        <article id="c1" class="rounded-2xl border border-stone-200 bg-white p-7 md:p-9 space-y-7">
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold px-3 py-1">Strong</span>
+              <span class="rounded-full bg-stone-100 text-stone-600 text-[11px] px-3 py-1 font-mono">in-process</span>
+              <span class="text-[11px] text-stone-400 font-mono">#1</span>
+            </div>
+            <h2 class="font-serif text-2xl md:text-3xl">Deepen 卦象 derivation into one module</h2>
+            <p class="font-mono text-xs text-stone-500">app.js:92–136 · app.js:264–281 · app.js:1631–1660</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5 items-stretch">
+            <div class="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+              <div class="label mb-3">Before · five shallow functions</div>
+              <div class="flex items-end justify-between gap-2 h-[190px] px-1">
+                <div class="flex-1 flex flex-col items-center gap-1">
+                  <div class="w-full h-[54px] bg-amber-200 border border-amber-300"></div>
+                  <div class="w-full h-[56px] bg-slate-200 border border-slate-300"></div>
+                  <div class="chip text-stone-500 text-center leading-tight">toss<br>Coins</div>
+                </div>
+                <div class="flex-1 flex flex-col items-center gap-1">
+                  <div class="w-full h-[58px] bg-amber-200 border border-amber-300"></div>
+                  <div class="w-full h-[52px] bg-slate-200 border border-slate-300"></div>
+                  <div class="chip text-stone-500 text-center leading-tight">getPrimary<br>Hexagram</div>
+                </div>
+                <div class="flex-1 flex flex-col items-center gap-1">
+                  <div class="w-full h-[62px] bg-amber-200 border border-amber-300"></div>
+                  <div class="w-full h-[60px] bg-slate-200 border border-slate-300"></div>
+                  <div class="chip text-stone-500 text-center leading-tight">getTransformed<br>Hexagram</div>
+                </div>
+                <div class="flex-1 flex flex-col items-center gap-1">
+                  <div class="w-full h-[56px] bg-amber-200 border border-amber-300"></div>
+                  <div class="w-full h-[46px] bg-slate-200 border border-slate-300"></div>
+                  <div class="chip text-stone-500 text-center leading-tight">getMoving<br>Lines</div>
+                </div>
+                <div class="flex-1 flex flex-col items-center gap-1">
+                  <div class="w-full h-[64px] bg-amber-200 border border-amber-300"></div>
+                  <div class="w-full h-[50px] bg-slate-200 border border-slate-300"></div>
+                  <div class="chip text-stone-500 text-center leading-tight">compute<br>Reading</div>
+                </div>
+              </div>
+              <div class="mt-3 flex items-center justify-between text-[10px] font-mono">
+                <span class="text-amber-700">interface ≈ implementation</span>
+                <span class="text-red-600">bit-flip written twice · DATA lookup ×3</span>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-stone-200 bg-white p-4">
+              <div class="label mb-3">After · one deep module</div>
+              <div class="h-[190px] flex items-center justify-center">
+                <div class="w-[78%] deep rounded-md overflow-hidden shadow-sm">
+                  <div class="px-4 py-2 border-b border-white/20 flex items-center justify-between">
+                    <span class="text-[11px] uppercase tracking-wider">deriveReading(numbers, table)</span>
+                    <span class="chip text-white/50">1 fn</span>
+                  </div>
+                  <div class="px-4 py-4 space-y-1.5 text-[11px] font-mono fade">
+                    <div>hexagramFor(binary) → 本卦 / 变卦</div>
+                    <div>movingIndices(numbers) → 动爻</div>
+                    <div>lineTypes(numbers) → 爻性</div>
+                    <div>binaryFrom(numbers) → 6/7/8/9 → 0/1</div>
+                  </div>
+                </div>
+              </div>
+              <div class="mt-3 flex items-center justify-between text-[10px] font-mono">
+                <span class="text-emerald-700">small interface, whole reading behind it</span>
+                <span class="text-stone-500">pure</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-3 gap-5 text-sm">
+            <div class="md:col-span-1">
+              <div class="label mb-1">Problem</div>
+              <p class="text-stone-700">One reading is derived by five functions that each re-know the encoding, and the bit-flip is written twice.</p>
+              <p class="mt-2 text-xs text-stone-500 italic">Deletion test: delete <code class="font-mono">computeReading</code> and its logic reappears in <code class="font-mono">showResult</code> and <code class="font-mono">getTransformedHexagram</code> — it is earning its keep, but it is not the only place doing it.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Solution</div>
+              <p class="text-stone-700">One module: <code class="font-mono text-xs">deriveReading(numbers, table) → Reading</code>. Hexagram lookup, bit flipping, 动爻 and 爻性 live behind it; <code class="font-mono text-xs">DATA</code> arrives as a parameter.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Wins</div>
+              <ul class="space-y-1 text-stone-700">
+                <li>· tests: 6 numbers in, whole 卦象 out</li>
+                <li>· delete duplicate bit-flip</li>
+                <li>· <span class="font-mono text-xs">DATA</span> becomes an explicit dependency</li>
+                <li>· locality: 爻性 bugs in one place</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ══════════════════════════════════════════════ -->
+        <!-- Candidate 2                                  -->
+        <!-- ══════════════════════════════════════════════ -->
+        <article id="c2" class="rounded-2xl border border-stone-200 bg-white p-7 md:p-9 space-y-7">
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold px-3 py-1">Strong</span>
+              <span class="rounded-full bg-stone-100 text-stone-600 text-[11px] px-3 py-1 font-mono">local-substitutable</span>
+              <span class="text-[11px] text-stone-400 font-mono">#2</span>
+            </div>
+            <h2 class="font-serif text-2xl md:text-3xl">One 会话 module owns 卦历, 交流有效期 and the chat mirror</h2>
+            <p class="font-mono text-xs text-stone-500">app.js:780–870 · app.js:921–967 · app.js:1199–1284 · app.js:1433–1517 · app.js:1662–1760</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5 items-stretch">
+            <div class="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+              <div class="label mb-3">Before · one 会话, three homes</div>
+              <div class="h-[190px] flex flex-col justify-center gap-3">
+                <div class="flex items-stretch gap-2">
+                  <div class="flex-1 rounded border border-slate-300 bg-white px-2 py-3">
+                    <div class="chip text-slate-700 font-semibold">chatState</div>
+                    <div class="chip text-stone-500 mt-1 text-[9px]">history · transport<br>previousInteractionId</div>
+                  </div>
+                  <div class="flex flex-col items-center justify-center text-red-600 text-xs">
+                    <span>⇄</span><span class="text-[9px] font-mono">copy</span>
+                  </div>
+                  <div class="flex-1 rounded border border-slate-300 bg-white px-2 py-3">
+                    <div class="chip text-slate-700 font-semibold">state.session</div>
+                    <div class="chip text-stone-500 mt-1 text-[9px]">messages · expiresAt<br>transport · ids</div>
+                  </div>
+                </div>
+                <div class="flex justify-center text-red-600 text-xs">⇅ <span class="text-[9px] font-mono ml-1">saveSession / loadSessions</span></div>
+                <div class="rounded border border-red-300 bg-red-50 px-3 py-3">
+                  <div class="chip text-red-700 font-semibold">localStorage · iching_sessions_v1</div>
+                  <div class="chip text-red-500 mt-1 text-[9px]">schema check · 100 cap · ephemeral silent skip</div>
+                </div>
+                <div class="text-[10px] font-mono text-red-600 text-center">12 separate 交流有效期 checks across the file</div>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-stone-200 bg-white p-4">
+              <div class="label mb-3">After · one module, two adapters</div>
+              <div class="h-[190px] flex flex-col justify-center">
+                <div class="deep rounded-md px-4 py-3">
+                  <div class="text-[11px] uppercase tracking-wider border-b border-white/20 pb-2 mb-2 flex justify-between">
+                    <span>会话 module</span><span class="chip text-white/50">record · messages · validity</span>
+                  </div>
+                  <div class="text-[11px] font-mono fade space-y-1">
+                    <div>createSession · appendMessage</div>
+                    <div>listSessions · loadSession · clear</div>
+                    <div>canContinue(session) → one gate</div>
+                  </div>
+                </div>
+                <div class="flex justify-center gap-10 mt-2 text-stone-400">
+                  <span class="text-xs">│</span><span class="text-xs">│</span>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="rounded border border-dashed border-stone-400 bg-stone-50 px-2 py-2 text-center">
+                    <div class="chip text-stone-600 text-[9px]">localStorage adapter</div>
+                    <div class="text-[9px] text-stone-400">prod</div>
+                  </div>
+                  <div class="rounded border border-dashed border-stone-400 bg-stone-50 px-2 py-2 text-center">
+                    <div class="chip text-stone-600 text-[9px]">in-memory adapter</div>
+                    <div class="text-[9px] text-stone-400">tests</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-3 gap-5 text-sm">
+            <div>
+              <div class="label mb-1">Problem</div>
+              <p class="text-stone-700">The same 会话 facts are written to two globals and localStorage, and 交流有效期 is re-decided at every entry point.</p>
+              <p class="mt-2 text-xs text-stone-500 italic">Deletion test: delete <code class="font-mono">persistMessage</code> and every caller must remember the ordering rule — the module is load-bearing, but its interface hides nothing.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Solution</div>
+              <p class="text-stone-700">A 会话 module owns the record and its adapter. <code class="font-mono text-xs">chatState</code> stops mirroring it; <code class="font-mono text-xs">canContinue(session)</code> is the single 交流有效期 gate that actions call.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Wins</div>
+              <ul class="space-y-1 text-stone-700">
+                <li>· 交流有效期: one seam, 12 callers</li>
+                <li>· fake clock tests, no localStorage</li>
+                <li>· one write path per fact</li>
+                <li>· delete two mirrors</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ══════════════════════════════════════════════ -->
+        <!-- Candidate 3                                  -->
+        <!-- ══════════════════════════════════════════════ -->
+        <article id="c3" class="rounded-2xl border border-stone-200 bg-white p-7 md:p-9 space-y-7">
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold px-3 py-1">Strong</span>
+              <span class="rounded-full bg-stone-100 text-stone-600 text-[11px] px-3 py-1 font-mono">in-process</span>
+              <span class="text-[11px] text-stone-400 font-mono">#3</span>
+            </div>
+            <h2 class="font-serif text-2xl md:text-3xl">Collapse the 解卦面板 into one mounted module</h2>
+            <p class="font-mono text-xs text-stone-500">app.js:982–1284 · app.js:1772–1863 · app.js:1896</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5 items-stretch">
+            <div class="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+              <div class="label mb-3">Before · interface is the whole page</div>
+              <div class="h-[190px] flex flex-col gap-2">
+                <div class="flex-1 rounded border border-amber-300 bg-amber-50 p-2 overflow-hidden">
+                  <div class="chip text-amber-800 leading-relaxed text-[9px]">
+                    #chat-panel #chat-validity #chat-expired #chat-expired-at #chat-key-row #gemini-key #gemini-model #btn-save-key #btn-clear-key #chat-key-status #chat-log #chat-chips #chat-composer #chat-input #btn-chat-send #chat-foot #btn-toggle-prompt #btn-add-feedback #prompt-output #prompt-text #btn-copy-prompt #btn-share-ai #copy-feedback #chat-feedback #feedback-input #btn-feedback-save #chat-toast …
+                  </div>
+                </div>
+                <div class="grid grid-cols-3 gap-2 text-center">
+                  <div class="rounded border border-red-300 bg-red-50 px-1 py-2 chip text-red-700 text-[9px]">4 × document<br>listeners</div>
+                  <div class="rounded border border-red-300 bg-red-50 px-1 py-2 chip text-red-700 text-[9px]">setInterval<br>1 s ticker</div>
+                  <div class="rounded border border-red-300 bg-red-50 px-1 py-2 chip text-red-700 text-[9px]">setTimeout(0)<br>init order</div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <div class="h-2 bg-amber-300 flex-1 rounded-sm"></div>
+                  <div class="h-2 bg-slate-300 w-6 rounded-sm"></div>
+                </div>
+                <div class="flex justify-between text-[10px] font-mono"><span class="text-amber-700">interface</span><span class="text-slate-500">implementation</span></div>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-stone-200 bg-white p-4">
+              <div class="label mb-3">After · four methods</div>
+              <div class="h-[190px] flex flex-col justify-center gap-3">
+                <div class="flex items-center gap-2">
+                  <div class="h-2 bg-amber-300 w-24 rounded-sm"></div>
+                  <div class="h-2 deep flex-1 rounded-sm"></div>
+                </div>
+                <div class="flex justify-between text-[10px] font-mono"><span class="text-amber-700">interface</span><span class="text-slate-500">implementation</span></div>
+                <div class="deep rounded-md px-3 py-2">
+                  <div class="text-[11px] uppercase tracking-wider mb-1">解卦面板 module</div>
+                  <div class="chip text-white/60 text-[10px] space-y-0.5">
+                    <div>mount(container, { session, store })</div>
+                    <div>refresh() · destroy()</div>
+                  </div>
+                </div>
+                <div class="text-[10px] text-stone-500 text-center font-mono">ids, listeners and ticker stay inside · one seam to the result page</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-3 gap-5 text-sm">
+            <div>
+              <div class="label mb-1">Problem</div>
+              <p class="text-stone-700">The panel's interface is 41 ids, four document listeners and a timer; the real bugs sit in the five update functions called through <code class="font-mono text-xs">setTimeout(0)</code>, not in the template.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Solution</div>
+              <p class="text-stone-700">A 解卦面板 module mounted into a container: it owns its ids, binds handlers to its own root, runs its own 交流有效期 ticker, and exposes <code class="font-mono text-xs">refresh</code> / <code class="font-mono text-xs">destroy</code>.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Wins</div>
+              <ul class="space-y-1 text-stone-700">
+                <li>· interface: 41 ids → 4 methods</li>
+                <li>· no <span class="font-mono text-xs">setTimeout(0)</span> init order</li>
+                <li>· locality: expiry UI in one module</li>
+                <li>· tests mount into a container</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ══════════════════════════════════════════════ -->
+        <!-- Candidate 4                                  -->
+        <!-- ══════════════════════════════════════════════ -->
+        <article id="c4" class="rounded-2xl border border-stone-200 bg-white p-7 md:p-9 space-y-7">
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-800 text-[11px] font-semibold px-3 py-1">Worth exploring</span>
+              <span class="rounded-full bg-stone-100 text-stone-600 text-[11px] px-3 py-1 font-mono">in-process</span>
+              <span class="text-[11px] text-stone-400 font-mono">#4</span>
+            </div>
+            <h2 class="font-serif text-2xl md:text-3xl">Split 解卦提示 into digest + brief</h2>
+            <p class="font-mono text-xs text-stone-500">app.js:572–715 · app.js:1286–1294</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5 items-stretch">
+            <div class="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+              <div class="label mb-3">Before · one constructor, two shapes</div>
+              <div class="h-[200px] rounded-lg bg-white border border-stone-200 p-4 flex flex-col justify-center gap-3">
+                <div class="flex items-center gap-2">
+                  <div class="rounded border border-red-300 bg-red-50 px-2 py-1 text-[10px] font-mono text-red-700 whitespace-nowrap">state · 5 fields</div>
+                  <span class="text-red-500 text-[10px] font-mono">──reads──▶</span>
+                  <div class="flex-1 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[10px] font-mono text-amber-900 leading-tight">buildPromptText(question,<br/>{ instructions: false })</div>
+                </div>
+                <div class="ml-2 border-l border-dashed border-stone-300 pl-4 space-y-2">
+                  <div class="flex items-center gap-2"><span class="text-stone-400 text-[10px]">▶</span><div class="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-mono">解卦提示 text</div></div>
+                  <div class="flex items-center gap-2"><span class="text-stone-400 text-[10px]">▶</span><div class="rounded border border-stone-300 bg-stone-50 px-2 py-1 text-[10px] font-mono">本机对话 system prompt</div><span class="text-[9px] font-mono text-red-600">tail cut</span></div>
+                </div>
+              </div>
+              <p class="mt-3 text-[10px] font-mono text-red-600">mode = a boolean flag on a 90-line string builder</p>
+            </div>
+
+            <div class="rounded-xl border border-stone-200 bg-white p-4">
+              <div class="label mb-3">After · digest at the seam</div>
+              <div class="h-[200px] rounded-lg bg-stone-50/60 border border-stone-200 p-4 flex flex-col justify-center gap-3">
+                <div class="flex items-center gap-1.5">
+                  <div class="rounded border border-stone-300 bg-white px-2 py-1 text-[10px] font-mono">Reading</div>
+                  <span class="text-stone-400 text-[10px]">▶</span>
+                  <div class="rounded deep px-2.5 py-1.5 text-[10px] font-mono">readingDigest(reading)</div>
+                </div>
+                <div class="ml-2 border-l border-dashed border-stone-300 pl-4 space-y-2">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-stone-400 text-[10px]">▶</span>
+                    <div class="rounded border border-stone-300 bg-white px-2 py-1 text-[10px] font-mono">interpretationBrief(…)</div>
+                    <span class="text-stone-400 text-[10px]">▶</span>
+                    <div class="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] font-mono">解卦提示 text</div>
+                  </div>
+                  <div class="flex items-center gap-2 text-[10px] font-mono">
+                    <span class="text-emerald-600">└─ same digest ─▶</span>
+                    <div class="rounded border border-stone-300 bg-white px-2 py-1">本机对话 system prompt</div>
+                  </div>
+                </div>
+              </div>
+              <p class="mt-3 text-[10px] font-mono text-emerald-700">same facts, two consumers, no flag</p>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-3 gap-5 text-sm">
+            <div>
+              <div class="label mb-1">Problem</div>
+              <p class="text-stone-700"><code class="font-mono text-xs">buildPromptText</code> is deep but its interface lies: it reads five global fields and selects behaviour with an <code class="font-mono text-xs">instructions</code> flag.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Solution</div>
+              <p class="text-stone-700"><code class="font-mono text-xs">readingDigest(reading)</code> emits the 卦象 facts; <code class="font-mono text-xs">interpretationBrief(reading, question)</code> adds the 解卦要求. The 本机对话 system prompt reuses the digest instead of truncating a full prompt.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Wins</div>
+              <ul class="space-y-1 text-stone-700">
+                <li>· test prompt text without a DOM</li>
+                <li>· no boolean-shaped interface</li>
+                <li>· digest reused by both prompt paths</li>
+                <li>· one source for 卦象 wording</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ══════════════════════════════════════════════ -->
+        <!-- Candidate 5                                  -->
+        <!-- ══════════════════════════════════════════════ -->
+        <article id="c5" class="rounded-2xl border border-stone-200 bg-white p-7 md:p-9 space-y-7">
+          <div class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-800 text-[11px] font-semibold px-3 py-1">Worth exploring</span>
+              <span class="rounded-full bg-stone-100 text-stone-600 text-[11px] px-3 py-1 font-mono">in-process</span>
+              <span class="text-[11px] text-stone-400 font-mono">#5</span>
+            </div>
+            <h2 class="font-serif text-2xl md:text-3xl">Collapse the result page's eight render functions</h2>
+            <p class="font-mono text-xs text-stone-500">app.js:282–348 · app.js:350–505</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5 items-stretch">
+            <div class="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+              <div class="label mb-3">Before · composition lives in the caller</div>
+              <div class="h-[210px] rounded-lg bg-white border border-stone-200 p-3 flex flex-col justify-center">
+                <div class="rounded bg-amber-100 border border-amber-300 px-2 py-1 text-[10px] font-mono text-center text-amber-900">showResult() · composes 8 calls in order</div>
+                <div class="ml-3 mt-2 border-l border-stone-300 pl-3 grid grid-cols-2 gap-1.5">
+                  <div class="rounded border border-stone-300 bg-stone-50 px-1.5 py-1 text-[9px] font-mono">renderHexagramSection ×2</div>
+                  <div class="rounded border border-stone-300 bg-stone-50 px-1.5 py-1 text-[9px] font-mono">renderYaoCiSection</div>
+                  <div class="rounded border border-dashed border-red-400 bg-red-50 px-1.5 py-1 text-[9px] font-mono text-red-700">renderDivider ✕</div>
+                  <div class="rounded border border-stone-300 bg-stone-50 px-1.5 py-1 text-[9px] font-mono">renderMovingLinesSection</div>
+                  <div class="rounded border border-dashed border-red-400 bg-red-50 px-1.5 py-1 text-[9px] font-mono text-red-700">renderArrow ✕</div>
+                  <div class="rounded border border-stone-300 bg-stone-50 px-1.5 py-1 text-[9px] font-mono">renderToggle</div>
+                  <div class="rounded border border-stone-300 bg-stone-50 px-1.5 py-1 text-[9px] font-mono col-span-2">renderAllLinesSection</div>
+                </div>
+              </div>
+              <p class="mt-2 text-[10px] font-mono text-red-600">#toggle-lines-btn · #all-lines-section → only a document listener knows</p>
+            </div>
+
+            <div class="rounded-xl border border-stone-200 bg-white p-4">
+              <div class="label mb-3">After · one result module</div>
+              <div class="h-[210px] flex items-center justify-center">
+                <div class="w-[88%] deep rounded-md overflow-hidden">
+                  <div class="px-3 py-2 border-b border-white/20 flex justify-between">
+                    <span class="text-[11px] uppercase tracking-wider">result view</span>
+                    <span class="chip text-white/50">renderReading(reading)</span>
+                  </div>
+                  <div class="px-3 py-3 text-[10px] font-mono fade space-y-1">
+                    <div>lineList(lines, { highlight, change })</div>
+                    <div>hexagramBlock · yaoCiBlock</div>
+                    <div>movingBlock · transformedBlock</div>
+                    <div>toggle · noChangeNote</div>
+                  </div>
+                </div>
+              </div>
+              <p class="mt-2 text-[10px] font-mono text-emerald-700">one element returned · toggle handled inside</p>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-3 gap-5 text-sm">
+            <div>
+              <div class="label mb-1">Problem</div>
+              <p class="text-stone-700">Eight siblings each build a detached div; ordering lives in <code class="font-mono text-xs">showResult</code>, and the 爻性 symbol/position HTML is repeated four times.</p>
+              <p class="mt-2 text-xs text-stone-500 italic">Deletion test: delete <code class="font-mono">renderDivider</code> or <code class="font-mono">renderArrow</code> and complexity simply moves two lines into the caller — they are pass-throughs.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Solution</div>
+              <p class="text-stone-700">A result module with <code class="font-mono text-xs">renderReading(reading)</code> as its interface: one internal <code class="font-mono text-xs">lineList</code> builder, one place that owns the 变卦爻辞 toggle, one returned element.</p>
+            </div>
+            <div>
+              <div class="label mb-1">Wins</div>
+              <ul class="space-y-1 text-stone-700">
+                <li>· delete two pass-throughs</li>
+                <li>· 爻性 markup written once</li>
+                <li>· toggle stops reaching across the page</li>
+                <li>· one interface for the result view</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ── Top recommendation ─────────────────────────── -->
+      <section id="top-recommendation" class="rounded-2xl deep p-8 md:p-10">
+        <p class="label !text-white/50 mb-2">Top recommendation</p>
+        <h2 class="font-serif text-3xl mb-4">Start with <a href="#c1" class="underline decoration-white/30 underline-offset-4 hover:decoration-white">#1 — 卦象 derivation</a></h2>
+        <p class="text-white/80 leading-relaxed max-w-3xl">
+          It is the pure core every other deepening has to cross: the 解卦提示 module (#4), the result view (#5) and the 会话 module (#2) all consume a <code class="font-mono text-xs">Reading</code> that does not exist yet. One module, one test file, no DOM, no localStorage — and the first real test surface in a codebase that has none. #2 is the next move: it carries the most recent churn, and once 交流有效期 has a single gate, #3 can mount the 解卦面板 against it.
+        </p>
+        <p class="mt-6 text-xs text-white/40 font-mono">Derived from CONTEXT.md domain terms · architecture terms: module, interface, implementation, depth, seam, adapter, leverage, locality</p>
+      </section>
+    </main>
+  </body>
+</html>
