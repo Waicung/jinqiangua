@@ -35,12 +35,14 @@ _Avoid_：卦（易与六十四卦中的某一卦混淆）、卦型
 用户点击按钮依次获得六次结果的过程。每次点击触发三枚硬币独立闪烁动画（1.2 秒），数字定格后硬币以阴阳着色区分阳面（3）与阴面（2），按钮在动画期间禁用。
 
 **解卦提示 / Prompt**：
-解卦面板内的外部 AI 出口。在面板底部的「生成解卦提示」里，用当前输入（或最后一次提问）生成包含本卦、变卦、动爻、爻辞等完整卦象信息的结构化 prompt（`buildPromptText`），并在面板内展开预览；点「复制」写入剪贴板，可粘贴到第三方 AI 助手进行解读。不涉及任何 API 调用，用户数据不离设备。已展开后同一按钮变为「收起解卦提示」。有效期截止后该出口关闭。
+解卦面板内的外部 AI 出口。在面板底部的「生成解卦提示」里，用当前输入（或最后一次提问）生成包含本卦、变卦、动爻、爻辞等完整卦象信息的结构化 prompt，并在面板内展开预览；点「复制」写入剪贴板，可粘贴到第三方 AI 助手进行解读。不涉及任何 API 调用，用户数据不离设备。已展开后同一按钮变为「收起解卦提示」。有效期截止后该出口关闭。
+文案由 `chat-panel.js` 通过构造参数 `brief`（`fullPrompt(question)` / `systemPrompt()`）向 `app.js` 索取——面板只负责展示与交互，不自己拼卦象措辞。
 _Use_：生成解卦提示、复制解卦提示、解卦提示
 _Avoid_：AI 解卦提示（已并入解卦面板，不再是独立区块）
 
 **解卦面板（Chat Panel）**：
-结果页底部的解卦区块（`chat-section`），把「应用内对话」与「解卦提示」合并为一个面板，标题「AI 解卦」。由上到下依次是：有效期倒计时、Key / 模型设置与连接状态、对话记录、输入框与发送按钮、次要动作行（「生成解卦提示」/「记录反馈」）、可展开的解卦提示块、反馈框。首次进入自动一条模型摘要（本卦、变卦、动爻与截止时间），并给出快捷问题 chips；消息为朴素气泡（用户右侧浅底、模型左侧白底、反馈虚线黄底），请求期间显示「思考中…」。Key 保存后设置行自动收起，状态行提供「更换 / 清除」。成功的一问一答会写入本机记录。有效期截止后，输入框、发送按钮、生成解卦提示与 Key 设置全部关闭，只剩反馈。
+结果页底部的解卦区块（`.chat-section`），把「应用内对话」与「解卦提示」合并为一个面板，标题「AI 解卦」。由上到下依次是：有效期倒计时、Key / 模型设置与连接状态、对话记录、输入框与发送按钮、次要动作行（「生成解卦提示」/「记录反馈」）、可展开的解卦提示块、反馈框。首次进入自动一条模型摘要（本卦、变卦、动爻与截止时间），并给出快捷问题 chips；消息为朴素气泡（用户右侧浅底、模型左侧白底、反馈虚线黄底），请求期间显示「思考中…」。Key 保存后设置行自动收起，状态行提供「更换 / 清除」。成功的一问一答会写入本机记录。有效期截止后，输入框、发送按钮、生成解卦提示与 Key 设置全部关闭，只剩反馈。
+实现：`chat-panel.js` 的 `mountChatPanel({ container, session, reading, store, brief, gemini })` 返回 `{ refresh, destroy }`。面板自己拥有根元素、根上的三个委托监听（click / keydown / input）、一秒一次的交流有效期 ticker，以及 history / system / busy / feedbackOpen / editingKey 这些瞬时状态；它不直接读卦历、不碰 `app.js` 的 `state`，也绝不逃出 `container`。选择器一律用 class（`.chat-input` 而非 `#chat-input`），这样同一页可以并存多个面板而 `destroy()` 不留全局残留。有效期判断只经 `canContinue`，UI 决策集中在纯函数 `panelState(session, now, flags)` 里（无 DOM 即可测）。
 _Use_：解卦面板、解卦对话、AI 解卦
 _Avoid_：聊天室（易误解为多人聊天）、AI 解卦提示（旧的两段式区块，已合并）
 
@@ -51,6 +53,7 @@ _Avoid_：聊天记录（易与消息列表混淆）、会话历史（易与卦�
 
 **卦历（本地记录）**：
 每次起卦自动生成一条本机会话记录，保存在 `localStorage`（键名 `iching_sessions_v1`），包含起卦时间、六个和值、本卦 / 变卦、解卦对话、反馈与有效期。页面右上角「卦」按钮打开卦历底部面板，记录按时间倒序排列，可回看任意一次；最多保留 100 条，可一键清空。回看旧记录会重建当时的结果页，并按有效期决定是继续交流还是只能反馈。开发快捷出结果（`?cast` / 「直接出结果」）不写入卦历。
+实现：`history-panel.js` 的 `mountHistoryPanel({ store, hexagramById, onOpenSession })` 返回 `{ open, close, refresh, isOpen, destroy }`。覆盖层是 body 级的，所以**只在 `init()` 挂载一次**，不随结果页重建；它拥有遮罩、列表渲染、Escape 与背景点击关闭、「清空全部」确认。点某条记录时它只把 id 交给上层（`onOpenSession(id)`），选哪个会话仍是 `app.js` 的事——这样卦历与解卦面板不会各自拥有一份「当前会话」。
 _Use_：卦历、起卦记录
 _Avoid_：历史消息（易与浏览器历史混淆）
 
@@ -78,6 +81,7 @@ _Avoid_：配置文件（过于泛泛）
 解卦面板的对话功能。用户粘贴自己的 Gemini API Key 后，浏览器直接调用 `generativelanguage.googleapis.com`，以多轮对话方式追问解卦。Key 通过 `x-goog-api-key` 请求头传递（不走 URL 查询参数），仅存于本机 `localStorage`（键名 `gemini_api_key`），不经过任何服务器；设置抽屉中的「清除 Key」按钮删除它，保存时留空则保留已存 Key。
 
 传输层优先使用 **Interactions API**（`POST /v1beta/interactions`，2026-06 GA，官方推荐接口）：每轮只发新输入，历史由服务端 `previous_interaction_id` 维护，`system_instruction` 为 interaction 级参数故每轮重发，回复从 `steps[].type === 'model_output'` 的 `content[].text` 拼出。若该接口返回 404/405（老账号或老区域），自动回退到仍受支持的 legacy `generateContent`（重放完整 `contents` 数组）；可用的传输层会被记住。
+实现：传输全在 `gemini.js` 的 `requestGemini({ key, model, text, history, system, session, fetchImpl? })`，无 DOM、无模块状态，`fetch` 可注入（测试用假 fetch 覆盖回退与错误映射）。它只读会话上的 `previousInteractionId` / `transport`，不写——写回仍经 `session.js` 的 `appendExchange`。回退只在 404/405 时发生；401/403/429 直接抛出可读错误。
 
 模型名在 UI 中可改、存于 `localStorage`（键名 `gemini_model`），默认 `gemini-3.8-flash`，允许带 `models/` 前缀。这是刻意的：模型名比代码活得短，`gemini-2.5-flash` 已对新用户下线；遇到 404 时错误提示会引导用户改成 `gemini-3.8-flash` 或别名 `gemini-flash-latest`。系统提示词由当前卦象资料构成（复用解卦提示的格式化结果，省略一次性解卦指令）。请求失败时回滚该轮上下文，并把问题放回输入框以便重试。未保存 Key 或离线时对话不可用，「生成解卦提示」与复制流程照常。
 

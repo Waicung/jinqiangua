@@ -2,7 +2,7 @@
    周易起卦 — Service Worker (Cache-First)
    ====================================================== */
 
-const CACHE_NAME = 'jinqiangua-v9';
+const CACHE_NAME = 'jinqiangua-v10';
 
 // Only http(s) requests can be stored in the Cache API.
 // Requests injected by browser extensions (chrome-extension://, …)
@@ -32,6 +32,10 @@ const STATIC_ASSETS = [
   '/app.js',
   '/hexagram.js',
   '/session.js',
+  '/ui-kit.js',
+  '/gemini.js',
+  '/chat-panel.js',
+  '/history-panel.js',
   '/manifest.json',
   '/version.json',
   '/icons/icon-192.svg',

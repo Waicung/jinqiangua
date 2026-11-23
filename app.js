@@ -10,14 +10,29 @@ import {
   posLabel,
   trigramInfo,
 } from './hexagram.js';
-import {
-  CHAT_VALID_MS,
-  canContinue,
-  conversation,
-  createSessionStore,
-  localStorageAdapter,
-  remainingMs,
-} from './session.js';
+import { createSessionStore, localStorageAdapter } from './session.js';
+import { mountChatPanel } from './chat-panel.js';
+import { mountHistoryPanel } from './history-panel.js';
+import { showToast } from './ui-kit.js';
+import { requestGemini } from './gemini.js';
+
+// 会话记录、卦历、交流有效期与两个面板都在各自模块里。
+// app.js 只负责起卦流程、结果页编排与把模块接起来。
+const sessionStore = createSessionStore(localStorageAdapter(localStorage));
+
+/** @type {ReturnType<typeof mountChatPanel> | null} 当前结果页上的解卦面板 */
+let chatPanel = null;
+/** @type {ReturnType<typeof mountHistoryPanel> | null} 卦历，一次挂载、长期存在 */
+let historyPanel = null;
+
+// 本机对话的传输层在 gemini.js；这里只负责把它接到面板上。
+const geminiPort = {
+  get available() {
+    return state.geminiAvailable;
+  },
+  /** @param {import('./gemini.js').GeminiRequest} request */
+  request: (request) => requestGemini(request),
+};
 
 // ── 1. Data ───────────────────────────────────────────
 let DATA = null;
@@ -46,11 +61,6 @@ const state = {
   primaryLineTypes: [],
   transformedLineTypes: [],
   geminiAvailable: true,
-  // 当前这次起卦的本地记录（会话）
-  session: null,
-  feedbackOpen: false,
-  // 用户主动点「更换 / 清除」时展开设置行；否则每秒刷新的有效期检查会把它又收起
-  keyEditing: false,
 };
 
 // ── 4.5. Gemini connectivity check ────────────────────
@@ -80,8 +90,7 @@ async function checkGeminiConnectivity() {
     state.geminiAvailable = false;
     console.warn('Gemini connectivity check failed. Falling back to Doubao.');
   }
-  // 检测完成后更新 UI（如果按钮已渲染）
-  updateShareButtonUI();
+  // 检测完成后面板下一次渲染会读到新的 available（解卦面板每秒刷新）
 }
 
 // ── 5. Core logic ─────────────────────────────────────
@@ -236,12 +245,12 @@ function showResult(options = {}) {
   const session = existing || sessionStore.create(numbers, reading, {
     persist: !options.ephemeral,
   });
-  state.session = session;
-  state.feedbackOpen = false;
-  state.keyEditing = false;
 
-  // 新结果从会话恢复对话
-  resetChat();
+  // 旧的解卦面板先拆掉（清 ticker 与监听），再清空结果容器
+  if (chatPanel) {
+    chatPanel.destroy();
+    chatPanel = null;
+  }
 
   // Build result HTML
   const container = $('result-content');
@@ -275,15 +284,35 @@ function showResult(options = {}) {
   }
 
   // ── AI 解卦：应用内对话（自带 Key）+ 复制提示到外部 AI，同一个面板 ──
-  container.appendChild(renderChatSection());
+  chatPanel = mountChatPanel({
+    container,
+    session,
+    reading,
+    store: sessionStore,
+    brief: interpretationBrief(reading),
+    gemini: geminiPort,
+  });
 
-  // 新结果：收起上一次的复制提示 toast
-  const oldToast = $('chat-toast');
-  if (oldToast) oldToast.classList.remove('show');
+  // 卦历里的记录可能刚变过（新起卦）
+  if (historyPanel && historyPanel.isOpen()) historyPanel.refresh();
 
   showPhase('phase-result');
   state.phase = 'result';
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+/**
+ * 解卦面板的「卦象措辞」接缝：解卦提示 + 对话系统提示。
+ * 候选 #4 会替换这里的实现，面板接口不变。
+ * @param {import('./hexagram.js').Reading} reading
+ */
+function interpretationBrief(reading) {
+  // buildPromptText 目前读 state 上的卦象字段；起卦结果刚写进 state。
+  void reading;
+  return {
+    fullPrompt: (question) => buildPromptText(question),
+    systemPrompt: () => buildChatSystemPrompt(),
+  };
 }
 
 function renderHexagramSection(hexagram, label, lineTypes, movingIndices) {
@@ -442,72 +471,6 @@ function renderNoChangeNote() {
   return div;
 }
 
-// ── 10. AI Prompt ─────────────────────────────────────
-function updateShareButtonUI() {
-  const btn = document.getElementById('btn-share-ai');
-  if (!btn) return; // 还未渲染，跳过
-
-  btn.textContent = state.geminiAvailable ? '🚀 在 Gemini 中打开' : '📋 复制到豆包';
-}
-
-// 解卦提示与对话共用同一个输入框：先看当前输入，再退回最后一条提问
-function currentQuestion() {
-  const input = $('chat-input');
-  const typed = input ? input.value.trim() : '';
-  if (typed) return typed;
-  const lastUser = [...chatState.history].reverse().find((m) => m.role === 'user');
-  return lastUser ? lastUser.text : '';
-}
-
-function showToast(message) {
-  let toast = document.getElementById('chat-toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'chat-toast';
-    toast.className = 'chat-toast';
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  void toast.offsetWidth; // 重置动画
-  toast.classList.add('show');
-  clearTimeout(showToast._timer);
-  showToast._timer = setTimeout(() => toast.classList.remove('show'), 2200);
-}
-
-// 有效期截止后，所有“继续解卦”的入口都走这里拦下
-function blockedByExpiry() {
-  if (canContinue(state.session, Date.now())) return false;
-  updateChatValidityUI();
-  showToast('本次交流已截止，只能记录反馈');
-  return true;
-}
-
-// 外部 AI 提示：对话面板里的次要出口（没 Key / 想换模型时用）
-function promptOutputHtml() {
-  return `
-    <div id="prompt-output" class="prompt-output" hidden>
-      <div class="prompt-head">
-        <span class="prompt-label">📋 解卦提示（复制到外部 AI）</span>
-      </div>
-      <pre id="prompt-text" class="prompt-text"></pre>
-      <div class="prompt-actions">
-        <button id="btn-copy-prompt" class="btn-secondary prompt-btn" type="button">📋 复制</button>
-        <button id="btn-share-ai" class="btn-primary prompt-btn" type="button">🚀 在 Gemini 中打开</button>
-      </div>
-      <span id="copy-feedback" class="copy-feedback"></span>
-    </div>
-  `;
-}
-
-function updatePromptToggleUI() {
-  const out = $('prompt-output');
-  const btn = $('btn-toggle-prompt');
-  if (!btn) return;
-  const open = !!out && !out.hidden;
-  btn.textContent = open ? '收起解卦提示' : '📋 生成解卦提示';
-  btn.classList.toggle('active', open);
-}
-
 function buildPromptText(questionRaw, options = {}) {
   const question = (questionRaw || '').trim() || '（未提供具体问题，请从卦象角度进行一般性解读）';
   const p = state.primary;
@@ -599,520 +562,7 @@ ${question}
   return prompt;
 }
 
-async function generatePrompt() {
-  if (blockedByExpiry()) return '';
-  const out = $('prompt-output');
-  const pre = $('prompt-text');
-  if (!out || !pre) return '';
-  const text = buildPromptText(currentQuestion());
-  pre.textContent = text;
-  out.hidden = false;
-  const feedback = $('copy-feedback');
-  if (feedback) feedback.textContent = '';
-  updatePromptToggleUI();
-  return text;
-}
-
-// 同一个入口：没展开就生成，已展开就收起
-function togglePromptOutput() {
-  const out = $('prompt-output');
-  if (!out) return;
-  if (out.hidden) {
-    generatePrompt();
-  } else {
-    out.hidden = true;
-    updatePromptToggleUI();
-  }
-}
-
-async function copyPrompt() {
-  if (blockedByExpiry()) return;
-  const text = $('prompt-text').textContent;
-  if (!text) return;
-  await copyText(text);
-  const feedback = $('copy-feedback');
-  if (feedback) {
-    feedback.textContent = '✅ 已复制！';
-    setTimeout(() => { feedback.textContent = ''; }, 2000);
-  }
-}
-
-async function shareToGemini() {
-  if (blockedByExpiry()) return;
-  const text = $('prompt-text').textContent;
-  if (!text) return;
-
-  // First ensure clipboard has the text
-  await copyText(text);
-
-  // Try native share — surfaces installed apps (Gemini, Claude, ChatGPT, etc.)
-  if (navigator.share) {
-    try {
-      await navigator.share({
-        title: '周易起卦 — 解卦请求',
-        text: text,
-      });
-      return;
-    } catch (err) {
-      // User cancelled share sheet — that's fine, do nothing
-      if (err.name !== 'AbortError') {
-        console.warn('Share failed:', err);
-      }
-    }
-  }
-
-  // Fallback: open appropriate AI app based on availability
-  if (state.geminiAvailable) {
-    window.open('https://gemini.google.com', '_blank');
-  } else {
-    // Try doubao deep link first, then website
-    window.open('https://www.doubao.com/', '_blank');
-  }
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-  }
-}
-
-// ── 10.6. Local Gemini chat (user-supplied API key) ─────
-// 直接在浏览器调用 Gemini REST API，Key 仅存于本机 localStorage，
-// 不经过任何服务器。离线时该区块不可用，其余功能不受影响。
-//
-// 传输层：优先 Interactions API（2026-06 GA，官方推荐给新项目），
-// 不可用时（404/405，如老账号或老区域）自动回退到 legacy 的
-// generateContent（官方声明仍“fully supported”）。
-// 模型名可在 UI 中修改，避免模型迭代时又需改代码。
-const GEMINI_MODEL_DEFAULT = 'gemini-3.8-flash';
-const GEMINI_KEY_STORAGE = 'gemini_api_key';
-const GEMINI_MODEL_STORAGE = 'gemini_model';
-const CHAT_TIMEOUT_MS = 60000;
-
-// 交流有效期、卦历记录与 localStorage 读写都在 session.js。
-const sessionStore = createSessionStore(localStorageAdapter(localStorage));
-
-const chatState = {
-  history: [],        // [{ role: 'user' | 'model', text }]，回退到 generateContent 时重放
-  system: '',
-  busy: false,
-};
-
-function formatClock(ts) {
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function formatDateTime(ts) {
-  const d = new Date(ts);
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${formatClock(ts)}`;
-}
-
-function formatRemaining(ms) {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) return `${h} 小时 ${String(m).padStart(2, '0')} 分`;
-  return `${m} 分 ${String(s).padStart(2, '0')} 秒`;
-}
-
-function getGeminiKey() {
-  try {
-    return localStorage.getItem(GEMINI_KEY_STORAGE) || '';
-  } catch {
-    return '';
-  }
-}
-
-function setGeminiKey(key) {
-  try {
-    if (key) localStorage.setItem(GEMINI_KEY_STORAGE, key);
-    else localStorage.removeItem(GEMINI_KEY_STORAGE);
-  } catch {
-    // 隐私模式下 localStorage 可能不可用，忽略
-  }
-}
-
-// 允许用户填 `gemini-3.8-flash` 或 `models/gemini-3.8-flash`
-function getGeminiModel() {
-  let model = '';
-  try {
-    model = localStorage.getItem(GEMINI_MODEL_STORAGE) || '';
-  } catch {
-    model = '';
-  }
-  model = (model || GEMINI_MODEL_DEFAULT).trim().replace(/^models\//, '');
-  return model || GEMINI_MODEL_DEFAULT;
-}
-
-function setGeminiModel(model) {
-  const clean = (model || '').trim().replace(/^models\//, '');
-  try {
-    if (clean && clean !== GEMINI_MODEL_DEFAULT) localStorage.setItem(GEMINI_MODEL_STORAGE, clean);
-    else localStorage.removeItem(GEMINI_MODEL_STORAGE);
-  } catch {
-    // 同上，忽略
-  }
-}
-
-function resetChat() {
-  chatState.history = [];
-  chatState.system = '';
-  chatState.busy = false;
-}
-
-// 从本地记录恢复对话气泡（不再重新写入 localStorage）
-function restoreChatLog() {
-  const log = $('chat-log');
-  if (!log) return;
-
-  const session = state.session;
-  log.innerHTML = '';
-  chatState.history = conversation(session);
-
-  const messages = (session && session.messages) || [];
-  if (!messages.length) {
-    renderChatIntro();
-    return;
-  }
-
-  for (const m of messages) {
-    appendChatMessage(m.role, m.text, { persist: false, kind: m.kind });
-  }
-
-  const wrap = $('chat-chips');
-  if (wrap) {
-    const hasTalked = chatState.history.some((m) => m.role === 'user');
-    if (hasTalked || !canContinue(session, Date.now())) {
-      wrap.style.display = 'none';
-    } else {
-      wrap.style.display = '';
-      wrap.innerHTML = buildQuickChips()
-        .map((q) => `<button type="button" class="chat-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
-        .join('');
-    }
-  }
-
-  updateChatValidityUI();
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[c]);
-}
-
-// 极简 Markdown：先转义，再只识别标题/加粗/列表
-function formatChatText(text) {
-  return escapeHtml(text)
-    .replace(/^#{1,6}\s*(.+)$/gm, '<strong>$1</strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^\s*[-*]\s+/gm, '· ');
-}
-
-function renderChatSection() {
-  const section = document.createElement('div');
-  section.className = 'result-section chat-section';
-  section.id = 'chat-panel';
-  section.innerHTML = `
-    <h2>🤖 AI 解卦</h2>
-    <p class="chat-desc">用自己的 Gemini API Key 在这里多轮追问；不想配 Key 时，也可一键生成解卦提示，复制到任意 AI 助手。Key 仅保存在本机浏览器，不会上传到任何服务器。可在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 免费获取。</p>
-
-    <div id="chat-validity" class="chat-validity"></div>
-
-    <div id="chat-expired" class="chat-expired" hidden>
-      <div class="ce-title">解卦交流已截止</div>
-      <p class="ce-text">占卦为一时之像，本次卦象的解读到 <span id="chat-expired-at"></span> 为止。此后只能记录反馈，不再解卦。</p>
-    </div>
-
-    <div id="chat-key-row" class="chat-settings">
-      <label class="chat-field">
-        <span class="chat-field-label">API Key</span>
-        <input id="gemini-key" type="password" class="prompt-input" placeholder="粘贴 Gemini API Key（留空则保留已存 Key）" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="chat-field">
-        <span class="chat-field-label">模型</span>
-        <input id="gemini-model" class="prompt-input" autocomplete="off" spellcheck="false">
-      </label>
-      <div class="chat-btn-row">
-        <button id="btn-save-key" class="btn-secondary chat-mini-btn">保存</button>
-        <button id="btn-clear-key" class="btn-secondary chat-mini-btn">清除 Key</button>
-      </div>
-      <p class="chat-hint">Key 只保存在本机浏览器 · <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">去 AI Studio 免费获取</a></p>
-    </div>
-
-    <p id="chat-key-status" class="chat-status"></p>
-    <div id="chat-log" class="chat-log"></div>
-    <div id="chat-chips" class="chat-chips"></div>
-    <div id="chat-composer" class="chat-composer">
-      <textarea id="chat-input" rows="1" placeholder="请解读本次卦象，或追问你想知道的…" enterkeyhint="send"></textarea>
-      <button id="btn-chat-send" class="chat-send" type="button" aria-label="发送">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
-
-    <div id="chat-foot" class="chat-foot-row">
-      <button id="btn-toggle-prompt" class="chat-foot-link" type="button">📋 生成解卦提示</button>
-      <button id="btn-add-feedback" class="chat-foot-link" type="button">记录反馈</button>
-    </div>
-
-    ${promptOutputHtml()}
-
-    <div id="chat-feedback" class="chat-feedback" hidden>
-      <div class="feedback-head">
-        <span class="feedback-title">反馈</span>
-        <span class="feedback-sub">只存档，不再解卦</span>
-      </div>
-      <textarea id="feedback-input" class="prompt-input feedback-input" rows="2" placeholder="事情后来如何？记下来，日后回看…" enterkeyhint="done"></textarea>
-      <div class="feedback-actions">
-        <button id="btn-feedback-save" class="btn-secondary chat-mini-btn" type="button">记录反馈</button>
-      </div>
-    </div>
-  `;
-  setTimeout(() => {
-    updateChatKeyUI();
-    restoreChatLog();
-    updateChatValidityUI();
-    updateShareButtonUI();
-    updatePromptToggleUI();
-  }, 0);
-  return section;
-}
-
-function updateChatKeyUI() {
-  const row = $('chat-key-row');
-  if (!row) return;
-
-  const modelInput = $('gemini-model');
-  // 每次重建都回填当前设置（不渲染 Key 本身）
-  if (modelInput && !modelInput.matches(':focus')) modelInput.value = getGeminiModel();
-
-  const status = $('chat-key-status');
-  const key = getGeminiKey();
-
-  if (!canContinue(state.session, Date.now())) {
-    row.style.display = 'none';
-    if (status) status.textContent = '';
-    return;
-  }
-
-  if (key) {
-    row.style.display = state.keyEditing ? 'flex' : 'none';
-    if (status) {
-      status.innerHTML =
-        `🔑 已保存本机 Key（…${escapeHtml(key.slice(-4))}） · 模型 ${escapeHtml(getGeminiModel())} ` +
-        `<button id="btn-change-key" class="chat-link">更换 / 清除</button>`;
-    }
-  } else {
-    row.style.display = 'flex';
-    if (status) status.textContent = '尚未保存 Key：应用内对话不可用，可点「生成解卦提示」复制到外部 AI。';
-  }
-}
-
-function saveKeyFromInput() {
-  const keyInput = $('gemini-key');
-  const modelInput = $('gemini-model');
-  if (!keyInput || !modelInput) return;
-
-  // 留空 = 只改模型，不动已存的 Key（清除 Key 用单独的按钮）
-  const key = keyInput.value.trim();
-  if (key) setGeminiKey(key);
-  setGeminiModel(modelInput.value);
-  keyInput.value = '';
-  state.keyEditing = false;
-
-  // Key / 模型变更后只重置服务端会话句柄，本地记录与对话保留
-  sessionStore.resetTransport(state.session);
-  updateChatKeyUI();
-  restoreChatLog();
-  showToast('Gemini 设置已保存');
-}
-
-function clearGeminiKey() {
-  setGeminiKey('');
-  const keyInput = $('gemini-key');
-  if (keyInput) keyInput.value = '';
-  state.keyEditing = false;
-  sessionStore.resetTransport(state.session);
-  updateChatKeyUI();
-  restoreChatLog();
-  showToast('已清除本机 Key');
-}
-
-function buildQuickChips() {
-  const hasMoving = state.movingLines.length > 0;
-  return [
-    '这次卦象的核心提示是什么？',
-    hasMoving ? '动爻在提醒我什么？' : '静卦该怎么理解？',
-    hasMoving ? '变卦的趋势如何？' : '我该注意什么？',
-    '用三点帮我总结',
-  ];
-}
-
-function renderChatIntro() {
-  const log = $('chat-log');
-  if (!log || log.childElementCount > 0) return;
-
-  const p = state.primary;
-  const t = state.transformed;
-  const mls = state.movingLines;
-
-  let text = `本次得到「${p.symbol} ${p.name}」。\n${p.judgment}`;
-  if (mls.length) {
-    text += `\n\n动爻在${mls.map((m) => m.position).join('、')}，会转为「${t.symbol} ${t.name}」。`;
-  } else {
-    text += '\n\n六爻皆静，以本卦卦辞为占。';
-  }
-  if (state.session) {
-    text += `\n\n解卦交流 ${Math.round(CHAT_VALID_MS / 3600000)} 小时内有效，至 ${formatDateTime(state.session.expiresAt)}。`;
-  }
-  text += '\n\n想从哪里聊起？可以直接问我。';
-  appendChatMessage('model', text, { persist: true, kind: 'intro' });
-
-  const wrap = $('chat-chips');
-  if (wrap) {
-    if (!canContinue(state.session, Date.now())) {
-      wrap.style.display = 'none';
-      return;
-    }
-    wrap.style.display = '';
-    wrap.innerHTML = buildQuickChips()
-      .map((q) => `<button type="button" class="chat-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
-      .join('');
-  }
-}
-
-function appendChatMessage(role, text, options = {}) {
-  const log = $('chat-log');
-  if (!log) return null;
-  const el = document.createElement('div');
-  el.className = `chat-msg ${role}`;
-
-  if (role === 'feedback') {
-    el.innerHTML = `<span class="feedback-tag">反馈</span>${formatChatText(text)}`;
-  } else {
-    el.innerHTML = formatChatText(text);
-  }
-
-  log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
-
-  // 只在真正产生内容时落盘；重建历史时传 persist:false
-  if (options.persist) {
-    sessionStore.appendMessage(state.session, role, text, { kind: options.kind });
-  }
-  return el;
-}
-
-function appendTyping() {
-  const el = appendChatMessage('pending', '');
-  if (el) el.innerHTML = '<span class="typing-dots" aria-label="解卦中"><i></i><i></i><i></i></span>';
-  return el;
-}
-
-function autoGrow(el) {
-  if (!el) return;
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
-
-// 有效期状态：剩余时间、截止后的锁屏与反馈入口
-function updateChatValidityUI() {
-  const session = state.session;
-  if (!session || !$('chat-panel')) return;
-
-  const now = Date.now();
-  const expired = !canContinue(session, now);
-
-  const strip = $('chat-validity');
-  if (strip) {
-    strip.classList.toggle('is-expired', expired);
-    strip.innerHTML = expired
-      ? `<span class="validity-dot"></span>本次解卦交流已于 ${escapeHtml(formatDateTime(session.expiresAt))} 截止`
-      : `<span class="validity-dot"></span>解卦交流有效期 · 剩余 ${escapeHtml(formatRemaining(remainingMs(session, now)))}（至 ${escapeHtml(formatDateTime(session.expiresAt))}）`;
-  }
-
-  const notice = $('chat-expired');
-  if (notice) notice.hidden = !expired;
-  const expiredAt = $('chat-expired-at');
-  if (expiredAt) expiredAt.textContent = formatDateTime(session.expiresAt);
-
-  // 截止后：只能记录反馈，问答、提示、外部 AI 入口全部关闭
-  const chatInput = $('chat-input');
-  if (chatInput) chatInput.hidden = expired;
-  const sendBtn = $('btn-chat-send');
-  if (sendBtn) {
-    sendBtn.hidden = expired;
-    sendBtn.disabled = expired || chatState.busy;
-  }
-  const composer = $('chat-composer');
-  if (composer) composer.hidden = expired;
-
-  const foot = $('chat-foot');
-  if (foot) foot.hidden = expired;
-
-  const addFeedbackBtn = $('btn-add-feedback');
-  if (addFeedbackBtn) {
-    addFeedbackBtn.hidden = expired;
-    addFeedbackBtn.textContent = state.feedbackOpen ? '收起反馈' : '记录反馈';
-  }
-
-  const promptOut = $('prompt-output');
-  if (promptOut && expired) {
-    promptOut.hidden = true;
-    updatePromptToggleUI();
-  }
-
-  const feedback = $('chat-feedback');
-  if (feedback) feedback.hidden = !(expired || state.feedbackOpen);
-
-  const keyRow = $('chat-key-row');
-  if (keyRow && expired) keyRow.style.display = 'none';
-
-  const chips = $('chat-chips');
-  if (chips && expired) chips.style.display = 'none';
-
-  updateChatKeyUI();
-}
-
-function toggleFeedbackComposer() {
-  if (!canContinue(state.session, Date.now())) return;
-  state.feedbackOpen = !state.feedbackOpen;
-  updateChatValidityUI();
-  if (state.feedbackOpen) {
-    const input = $('feedback-input');
-    if (input) setTimeout(() => input.focus({ preventScroll: true }), 60);
-  }
-}
-
-function saveFeedback() {
-  const session = state.session;
-  if (!session) return;
-  const input = $('feedback-input');
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) return;
-
-  appendChatMessage('feedback', text, { persist: true });
-  input.value = '';
-  autoGrow(input);
-  showToast('反馈已记录在本机');
-
-  // 记录反馈后把面板留在原位，方便继续补记
-  if (canContinue(session, Date.now())) {
-    state.feedbackOpen = true;
-    updateChatValidityUI();
-  }
-}
-
+// 本机对话的系统提示词：复用解卦提示的卦象资料，省略一次性解卦指令
 function buildChatSystemPrompt() {
   return `你是一位精通《周易》的占卜解卦师。以下是用户本次起卦的完整资料：
 
@@ -1120,222 +570,6 @@ ${buildPromptText('（用户会在对话中提出具体问题）', { instruction
 ---
 
 请依据以上资料与用户多轮对话：回答追问时简洁、具体、有针对性，不要重复粘贴整段卦象原文。`;
-}
-
-async function postJson(url, body, key) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // 用 header 传 Key，避免出现在 URL / 日志 / Referer 中
-        'x-goog-api-key': key,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const data = await res.json().catch(() => null);
-    return { res, data };
-  } catch (err) {
-    throw new Error(
-      err.name === 'AbortError' ? '请求超时，请稍后重试' : '网络错误，无法连接 Gemini'
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// Interactions API：只需发本轮新输入，历史由 previous_interaction_id 维护
-function callInteractions(key, text) {
-  const body = {
-    model: getGeminiModel(),
-    input: text,
-    // system_instruction 是 interaction 级别的，每轮都要重发
-    system_instruction: chatState.system,
-  };
-  const previousInteractionId = state.session && state.session.previousInteractionId;
-  if (previousInteractionId) {
-    body.previous_interaction_id = previousInteractionId;
-  }
-  return postJson('https://generativelanguage.googleapis.com/v1beta/interactions', body, key);
-}
-
-// 旧接口 generateContent：需重放完整 contents
-function callGenerateContent(key) {
-  return postJson(
-    `https://generativelanguage.googleapis.com/v1beta/models/${getGeminiModel()}:generateContent`,
-    {
-      systemInstruction: { parts: [{ text: chatState.system }] },
-      contents: chatState.history.map((m) => ({
-        role: m.role,
-        parts: [{ text: m.text }],
-      })),
-    },
-    key
-  );
-}
-
-function parseInteractionReply(data) {
-  const steps = (data && data.steps) || [];
-  const texts = [];
-  for (const step of steps) {
-    if (step.type !== 'model_output' || !Array.isArray(step.content)) continue;
-    for (const block of step.content) {
-      if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text);
-    }
-  }
-  return { text: texts.join('').trim(), id: (data && data.id) || '' };
-}
-
-function parseGenerateContentReply(data) {
-  const candidate = data && data.candidates && data.candidates[0];
-  const parts = (candidate && candidate.content && candidate.content.parts) || [];
-  const reason =
-    (data && data.promptFeedback && data.promptFeedback.blockReason) ||
-    (candidate && candidate.finishReason);
-  return { text: parts.map((p) => p.text || '').join('').trim(), reason };
-}
-
-// 上游文案自带句点时避免出现「.。」这样的双标点
-function stripEnd(msg) {
-  return String(msg || '').trim().replace(/[.。]$/, '');
-}
-
-function apiError(status, data) {
-  const msg = (data && data.error && data.error.message) || '';
-  if (status === 400 && /api key/i.test(msg)) {
-    return new Error('API Key 无效，请检查后重新保存');
-  }
-  if (status === 401 || status === 403) {
-    return new Error(
-      `该 Key 无权访问模型「${getGeminiModel()}」：${stripEnd(msg) || '请确认该模型已对你的账号开放'} 可在「更换 / 清除」中换个模型名（如 gemini-flash-latest）。`
-    );
-  }
-  if (status === 404) {
-    return new Error(
-      `模型「${getGeminiModel()}」不可用：${stripEnd(msg) || '可能已对新用户下线'} 请在「更换 / 清除」中改为 gemini-3.8-flash 或 gemini-flash-latest。`
-    );
-  }
-  if (status === 429) return new Error('调用额度已用尽，请稍后重试或更换 Key');
-  return new Error(msg || `请求失败（HTTP ${status}）`);
-}
-
-async function requestGemini(key, text) {
-  // 记住上次成功的传输层；首次默认 Interactions API
-  const preferred = state.session && state.session.transport;
-  const attempts =
-    preferred === 'generateContent'
-      ? ['generateContent']
-      : ['interactions', 'generateContent'];
-
-  let result = null;
-  for (const transport of attempts) {
-    result = transport === 'interactions'
-      ? await callInteractions(key, text)
-      : await callGenerateContent(key);
-
-    if (result.res.ok) {
-      const reply = transport === 'interactions'
-        ? parseInteractionReply(result.data)
-        : parseGenerateContentReply(result.data);
-
-      if (reply.text) return { ...reply, transport };
-
-      // in_progress / requires_action 等：明确告知而不是空回复
-      const status = result.data && result.data.status;
-      throw new Error(
-        reply.reason
-          ? `模型未返回内容（${reply.reason}）`
-          : status
-            ? `模型未返回内容（${status}）`
-            : '模型未返回内容'
-      );
-    }
-
-    // 只有「接口不存在」才值得换另一条路，其余错误直接抛
-    if (result.res.status !== 404 && result.res.status !== 405) break;
-  }
-
-  throw apiError(result.res.status, result.data);
-}
-
-async function sendChatMessage() {
-  if (chatState.busy) return;
-
-  // 占卦为一时之像：有效期过后不再解卦，只留反馈
-  if (!canContinue(state.session, Date.now())) {
-    updateChatValidityUI();
-    showToast('本次交流已截止，只能记录反馈');
-    return;
-  }
-
-  const input = $('chat-input');
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) return;
-
-  if (!getGeminiKey()) {
-    const keyRow = $('chat-key-row');
-    if (keyRow) keyRow.style.display = 'flex';
-    appendChatMessage('error', '请先在上方保存你的 Gemini API Key。');
-    return;
-  }
-  if (!navigator.onLine) {
-    appendChatMessage('error', '当前处于离线状态，无法调用 Gemini。卦象与解卦提示仍可正常使用。');
-    return;
-  }
-
-  if (!chatState.system) chatState.system = buildChatSystemPrompt();
-
-  input.value = '';
-  input.style.height = 'auto';
-  const userEl = appendChatMessage('user', text);
-  chatState.history.push({ role: 'user', text });
-
-  // 开始对话后收起快捷回复，避免干扰
-  const chips = $('chat-chips');
-  if (chips) chips.style.display = 'none';
-
-  const btn = $('btn-chat-send');
-  chatState.busy = true;
-  if (btn) {
-    btn.disabled = true;
-    btn.classList.add('is-busy');
-    btn.setAttribute('aria-label', '解卦中');
-  }
-  const typing = appendTyping();
-
-  try {
-    const reply = await requestGemini(getGeminiKey(), text);
-    if (typing) typing.remove();
-    appendChatMessage('model', reply.text);
-    chatState.history.push({ role: 'model', text: reply.text });
-
-    // 成功的一问一答（连同传输层句柄）一次写入本地记录
-    sessionStore.appendExchange(state.session, {
-      question: text,
-      answer: reply.text,
-      interactionId: reply.id,
-      transport: reply.transport,
-    });
-  } catch (err) {
-    if (typing) typing.remove();
-    chatState.history.pop(); // 回滚失败的用户提问，避免污染上下文
-    if (userEl) userEl.remove();
-    // 把问题放回输入框，方便修改 Key 后重试
-    if (input && !input.value.trim()) input.value = text;
-    appendChatMessage('error', '⚠️ ' + (err.message || '请求失败'));
-  } finally {
-    chatState.busy = false;
-    if (btn) {
-      btn.classList.remove('is-busy', 'loading');
-      btn.setAttribute('aria-label', '发送');
-    }
-    autoGrow(input);
-    updateChatValidityUI();
-  }
 }
 
 // ── 10.7. Dev shortcuts (跳过摇卦) ──────────────────────
@@ -1482,115 +716,21 @@ function renderDomainHexagram() {
     '<span class="symbol">' + h.symbol + '</span> ' + h.name;
 }
 
-// ── 12.5 卦历（本地记录浏览器） ──────────────────────
-function ensureHistoryPanel() {
-  if ($('history-overlay')) return;
-
-  const overlay = document.createElement('div');
-  overlay.id = 'history-overlay';
-  overlay.className = 'history-overlay';
-  overlay.hidden = true;
-  overlay.innerHTML = `
-    <div class="history-sheet" role="dialog" aria-modal="true" aria-labelledby="history-title">
-      <div class="history-head">
-        <div>
-          <div id="history-title" class="history-title">卦历</div>
-          <div class="history-sub">本机保存 · 解卦交流 ${Math.round(CHAT_VALID_MS / 3600000)} 小时</div>
-        </div>
-        <button id="btn-history-close" class="history-close" aria-label="关闭卦历">×</button>
-      </div>
-      <div id="history-list" class="history-list"></div>
-      <div class="history-foot">
-        <button id="btn-history-clear" class="chat-text-btn">清空全部记录</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-}
-
-function renderHistoryList() {
-  const listEl = $('history-list');
-  if (!listEl) return;
-
-  const records = sessionStore.list();
-  if (!records.length) {
-    listEl.innerHTML = '<p class="history-empty">还没有记录。起一卦，解卦对话会自动存在本机。</p>';
-    return;
-  }
-
-  listEl.innerHTML = records.map((session) => {
-    const p = hexagramById(session.primaryId, DATA);
-    const t = hexagramById(session.transformedId, DATA);
-    const moving = (session.movingIndices || []).length;
-    const expired = !canContinue(session, Date.now());
-    const rounds = (session.messages || []).filter((m) => !m.kind && m.role === 'user').length;
-    const feedbacks = (session.messages || []).filter((m) => m.role === 'feedback').length;
-
-    const title = p ? `${p.symbol} ${p.name}` : '未知卦';
-    const change = moving > 0 && t
-      ? `变 ${t.symbol} ${t.name} · ${moving} 爻动`
-      : '六爻皆静';
-
-    const meta = [
-      formatDateTime(session.createdAt),
-      rounds ? `${rounds} 问` : '未解卦',
-      feedbacks ? `${feedbacks} 条反馈` : null,
-    ].filter(Boolean).join(' · ');
-
-    return `
-      <button type="button" class="history-item" data-session="${escapeHtml(session.id)}">
-        <span class="hi-top">
-          <span class="hi-gan">${escapeHtml(title)}</span>
-          <span class="hi-status ${expired ? 'expired' : 'open'}">${expired ? '已截止' : '交流中'}</span>
-        </span>
-        <span class="hi-change">${escapeHtml(change)}</span>
-        <span class="hi-meta">${escapeHtml(meta)}</span>
-      </button>`;
-  }).join('');
-}
-
-function openHistory() {
-  ensureHistoryPanel();
-  renderHistoryList();
-  const overlay = $('history-overlay');
-  if (overlay) overlay.hidden = false;
-  document.body.classList.add('history-open');
-}
-
-function closeHistory() {
-  const overlay = $('history-overlay');
-  if (overlay) overlay.hidden = true;
-  document.body.classList.remove('history-open');
-}
-
-function openSessionById(id) {
-  const session = sessionStore.get(id);
-  if (!session) {
-    showToast('这条记录已不在本机');
-    renderHistoryList();
-    return;
-  }
-  closeHistory();
-  showResult({ session });
-}
-
-function clearHistory() {
-  if (!sessionStore.list().length) return;
-  if (!window.confirm('清空本机所有起卦记录？此操作不可撤销。')) return;
-  sessionStore.clear();
-  renderHistoryList();
-  showToast('本机记录已清空');
-}
-
 // ── 11. Event handlers ────────────────────────────────
+// 面板内部的事件绑定在各自模块里（delegated on their own root）。
+// 这里只剩全局的几条：起卦按钮、变卦爻辞 toggle、卦历开关、刷新。
 function setupEvents() {
   $('btn-start').addEventListener('click', startDivination);
   $('btn-throw').addEventListener('click', doThrow);
   $('btn-reset').addEventListener('click', startDivination);
+  $('btn-history').addEventListener('click', () => historyPanel && historyPanel.open());
+  $('btn-refresh').addEventListener('click', forceRefresh);
 
   // Toggle: 变卦全部爻辞的展开 / 收起
   document.addEventListener('click', (e) => {
-    const toggleBtn = e.target.closest('#toggle-lines-btn');
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const toggleBtn = target.closest('#toggle-lines-btn');
     if (!toggleBtn) return;
 
     const allLines = $('all-lines-section');
@@ -1601,84 +741,6 @@ function setupEvents() {
     toggleBtn.textContent = isHidden ? '收起爻辞' : '显示全部爻辞';
     toggleBtn.classList.toggle('active', isHidden);
   });
-
-  // Prompt、分享、chat 设置、快捷回复
-  document.addEventListener('click', (e) => {
-    if (e.target.closest('#btn-toggle-prompt')) togglePromptOutput();
-    if (e.target.closest('#btn-copy-prompt')) copyPrompt();
-    if (e.target.closest('#btn-share-ai')) shareToGemini();
-
-    if (e.target.closest('#btn-save-key')) saveKeyFromInput();
-    if (e.target.closest('#btn-clear-key')) clearGeminiKey();
-    if (e.target.closest('#btn-change-key')) {
-      state.keyEditing = true;
-      const row = $('chat-key-row');
-      if (row) row.style.display = 'flex';
-      const input = $('gemini-key');
-      if (input) input.focus();
-    }
-    if (e.target.closest('#btn-add-feedback')) toggleFeedbackComposer();
-    if (e.target.closest('#btn-feedback-save')) saveFeedback();
-    if (e.target.closest('#btn-chat-send')) sendChatMessage();
-
-    // 卦历：打开 / 关闭 / 清空 / 回看某条记录
-    if (e.target.closest('#btn-history')) openHistory();
-    if (e.target.closest('#btn-history-close')) closeHistory();
-    if (e.target.closest('#btn-history-clear')) clearHistory();
-    if (e.target.id === 'history-overlay') closeHistory();
-    const historyItem = e.target.closest('.history-item');
-    if (historyItem) {
-      openSessionById(historyItem.dataset.session || '');
-      return;
-    }
-
-    // 快捷回复 chip
-    const chip = e.target.closest('.chat-chip');
-    if (chip) {
-      const q = chip.dataset.q || '';
-      const input = $('chat-input');
-      if (input) input.value = q;
-      if (!getGeminiKey()) {
-        const keyRow = $('chat-key-row');
-        if (keyRow) keyRow.style.display = 'flex';
-        showToast('配置 Key 后即可对话；也可点「生成解卦提示」复制到外部 AI');
-      } else {
-        sendChatMessage();
-      }
-      return;
-    }
-  });
-
-  // Cmd/Ctrl + Enter 发送；保留普通 Enter 作为发送（输入法组合时忽略）
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      closeHistory();
-      return;
-    }
-    // 反馈框：Cmd/Ctrl + Enter 保存（普通 Enter 用于换行）
-    if (e.target && e.target.id === 'feedback-input') {
-      autoGrow(e.target);
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
-        e.preventDefault();
-        saveFeedback();
-      }
-      return;
-    }
-    if (!e.target || e.target.id !== 'chat-input') return;
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey) && !e.isComposing && e.keyCode !== 229) {
-      e.preventDefault();
-      sendChatMessage();
-    }
-  });
-
-  // 输入框随内容自动长高
-  document.addEventListener('input', (e) => {
-    if (e.target && e.target.id === 'chat-input') autoGrow(e.target);
-    if (e.target && e.target.id === 'feedback-input') autoGrow(e.target);
-  });
-
-  // Force refresh
-  $('btn-refresh').addEventListener('click', forceRefresh);
 }
 
 // ── 11. Init ──────────────────────────────────────────
@@ -1687,11 +749,15 @@ async function init() {
   renderDomainHexagram();
   $('btn-start').disabled = false;
   $('btn-start').textContent = '起卦';
-  ensureHistoryPanel();
-  setupEvents();
 
-  // 每秒刷新有效期倒计时；无结果页时函数自身会跳过
-  setInterval(updateChatValidityUI, 1000);
+  // 卦历一次挂载、长期存在；会话选择仍由这里决定
+  historyPanel = mountHistoryPanel({
+    store: sessionStore,
+    hexagramById: (id) => hexagramById(id, DATA),
+    onOpenSession: (id) => openSessionById(id),
+  });
+
+  setupEvents();
 
   // Online status for refresh button
   updateOnlineStatus();
@@ -1707,6 +773,17 @@ async function init() {
 
   // Version badge (bottom-right corner)
   initVersionBadge();
+}
+
+// 打开卦历里的一条记录：记录不在了就只提示，并重画列表
+function openSessionById(id) {
+  const session = sessionStore.get(id);
+  if (!session) {
+    showToast('这条记录已不在本机');
+    if (historyPanel) historyPanel.refresh();
+    return;
+  }
+  showResult({ session });
 }
 
 // ── 12. Version badge ────────────────────────────────

@@ -104,7 +104,3 @@ bun --hot ./index.ts
 ```
 
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
-
-## Architecture work
-
-- Read `docs/HANDOFF.md` before continuing architecture changes. It records the current deepening work, settled decisions, and the next candidate.

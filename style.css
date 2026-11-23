@@ -924,7 +924,7 @@ body {
 
 .chat-composer[hidden] { display: none; }
 
-#chat-input {
+.chat-input {
   flex: 1;
   min-width: 0;
   padding: 8px 0;
@@ -940,7 +940,7 @@ body {
   outline: none;
 }
 
-#chat-input::placeholder {
+.chat-input::placeholder {
   color: var(--text-secondary);
 }
 
@@ -1288,8 +1288,8 @@ body {
 .chat-foot-link:hover { color: var(--text); }
 .chat-foot-link.active { color: var(--primary); }
 
-#chat-input[hidden],
-#btn-chat-send[hidden] {
+.chat-input[hidden],
+.btn-chat-send[hidden] {
   display: none;
 }
 /* ── Toast ── */
