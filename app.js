@@ -10,6 +10,14 @@ import {
   posLabel,
   trigramInfo,
 } from './hexagram.js';
+import {
+  CHAT_VALID_MS,
+  canContinue,
+  conversation,
+  createSessionStore,
+  localStorageAdapter,
+  remainingMs,
+} from './session.js';
 
 // ── 1. Data ───────────────────────────────────────────
 let DATA = null;
@@ -225,15 +233,15 @@ function showResult(options = {}) {
   state.transformedLineTypes = reading.transformedLineTypes;
 
   // 每次起卦都落成本地会话记录；回看旧记录时沿用原记录
-  const session = existing || createSession(numbers, reading, !options.ephemeral);
+  const session = existing || sessionStore.create(numbers, reading, {
+    persist: !options.ephemeral,
+  });
   state.session = session;
   state.feedbackOpen = false;
   state.keyEditing = false;
 
   // 新结果从会话恢复对话
   resetChat();
-  chatState.previousInteractionId = session.previousInteractionId || '';
-  chatState.transport = session.transport || 'interactions';
 
   // Build result HTML
   const container = $('result-content');
@@ -468,7 +476,7 @@ function showToast(message) {
 
 // 有效期截止后，所有“继续解卦”的入口都走这里拦下
 function blockedByExpiry() {
-  if (!isSessionExpired(state.session)) return false;
+  if (canContinue(state.session, Date.now())) return false;
   updateChatValidityUI();
   showToast('本次交流已截止，只能记录反馈');
   return true;
@@ -688,85 +696,14 @@ const GEMINI_KEY_STORAGE = 'gemini_api_key';
 const GEMINI_MODEL_STORAGE = 'gemini_model';
 const CHAT_TIMEOUT_MS = 60000;
 
-// 占卦为一时之像：每次起卦只保留一段固定的解卦交流窗口。
-// 窗口结束后只能补记「反馈」，不再继续解卦问答，也不再发送到模型。
-const CHAT_VALID_MS = 24 * 60 * 60 * 1000; // 24 小时
-const SESSIONS_KEY = 'iching_sessions_v1';
-const SESSION_MAX = 100;
+// 交流有效期、卦历记录与 localStorage 读写都在 session.js。
+const sessionStore = createSessionStore(localStorageAdapter(localStorage));
 
 const chatState = {
   history: [],        // [{ role: 'user' | 'model', text }]，回退到 generateContent 时重放
   system: '',
   busy: false,
-  transport: 'interactions', // 记住当前可用的传输层
-  previousInteractionId: '',  // Interactions API 的会话句柄
 };
-
-// ── 10.6.1 本地会话记录 ─────────────────────────────
-// 每条记录 = 一次起卦 + 该次解卦对话 + 反馈。全部存 localStorage，
-// 不上传服务器（对话内容除外：调用 Gemini 时本就会发出）。
-function loadSessions() {
-  try {
-    const raw = localStorage.getItem(SESSIONS_KEY);
-    if (!raw) return [];
-    const list = JSON.parse(raw);
-    if (!Array.isArray(list)) return [];
-    return list.filter((s) =>
-      s && typeof s.id === 'string' &&
-      Number.isFinite(s.createdAt) &&
-      Array.isArray(s.numbers) && s.numbers.length === 6 &&
-      s.numbers.every((n) => n >= 6 && n <= 9) &&
-      Array.isArray(s.messages)
-    );
-  } catch {
-    return [];
-  }
-}
-
-function writeSessions(list) {
-  try {
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(list));
-  } catch {
-    // 隐私模式 / 配额满：记录功能静默降级，不影响起卦
-  }
-}
-
-function saveSession(session) {
-  if (!session || !session.id) return;
-  const list = loadSessions();
-  const idx = list.findIndex((s) => s.id === session.id);
-  if (idx >= 0) list[idx] = session;
-  else list.push(session);
-  list.sort((a, b) => b.createdAt - a.createdAt);
-  writeSessions(list.slice(0, SESSION_MAX));
-}
-
-function createSession(numbers, reading, persist = true) {
-  const createdAt = Date.now();
-  const session = {
-    id: `s_${createdAt.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-    createdAt,
-    expiresAt: createdAt + CHAT_VALID_MS,
-    numbers: numbers.slice(),
-    primaryId: reading.primary.id,
-    transformedId: reading.transformed.id,
-    movingIndices: reading.movingLines.map((m) => m.index),
-    messages: [],
-    previousInteractionId: '',
-    transport: 'interactions',
-  };
-  if (persist) saveSession(session);
-  else session.ephemeral = true;
-  return session;
-}
-
-function getSessionById(id) {
-  return loadSessions().find((s) => s.id === id) || null;
-}
-
-function isSessionExpired(session) {
-  return !!session && Date.now() >= (session.expiresAt || 0);
-}
 
 function formatClock(ts) {
   const d = new Date(ts);
@@ -786,15 +723,6 @@ function formatRemaining(ms) {
   if (h > 0) return `${h} 小时 ${String(m).padStart(2, '0')} 分`;
   return `${m} 分 ${String(s).padStart(2, '0')} 秒`;
 }
-
-// 把一条消息追加进当前本地记录（intro / 问答 / 反馈）
-function persistMessage(role, text, kind) {
-  const session = state.session;
-  if (!session || session.ephemeral) return;
-  session.messages.push({ role, text, at: Date.now(), ...(kind ? { kind } : {}) });
-  saveSession(session);
-}
-
 
 function getGeminiKey() {
   try {
@@ -839,8 +767,6 @@ function resetChat() {
   chatState.history = [];
   chatState.system = '';
   chatState.busy = false;
-  chatState.previousInteractionId = '';
-  chatState.transport = 'interactions';
 }
 
 // 从本地记录恢复对话气泡（不再重新写入 localStorage）
@@ -850,7 +776,7 @@ function restoreChatLog() {
 
   const session = state.session;
   log.innerHTML = '';
-  chatState.history = [];
+  chatState.history = conversation(session);
 
   const messages = (session && session.messages) || [];
   if (!messages.length) {
@@ -860,16 +786,12 @@ function restoreChatLog() {
 
   for (const m of messages) {
     appendChatMessage(m.role, m.text, { persist: false, kind: m.kind });
-    // intro 只是开场摘要，不属于 API 上下文
-    if (!m.kind && (m.role === 'user' || m.role === 'model')) {
-      chatState.history.push({ role: m.role, text: m.text });
-    }
   }
 
   const wrap = $('chat-chips');
   if (wrap) {
     const hasTalked = chatState.history.some((m) => m.role === 'user');
-    if (hasTalked || isSessionExpired(session)) {
+    if (hasTalked || !canContinue(session, Date.now())) {
       wrap.style.display = 'none';
     } else {
       wrap.style.display = '';
@@ -976,7 +898,7 @@ function updateChatKeyUI() {
   const status = $('chat-key-status');
   const key = getGeminiKey();
 
-  if (isSessionExpired(state.session)) {
+  if (!canContinue(state.session, Date.now())) {
     row.style.display = 'none';
     if (status) status.textContent = '';
     return;
@@ -1008,13 +930,7 @@ function saveKeyFromInput() {
   state.keyEditing = false;
 
   // Key / 模型变更后只重置服务端会话句柄，本地记录与对话保留
-  chatState.previousInteractionId = '';
-  chatState.transport = 'interactions';
-  if (state.session && !state.session.ephemeral) {
-    state.session.previousInteractionId = '';
-    state.session.transport = 'interactions';
-    saveSession(state.session);
-  }
+  sessionStore.resetTransport(state.session);
   updateChatKeyUI();
   restoreChatLog();
   showToast('Gemini 设置已保存');
@@ -1025,13 +941,7 @@ function clearGeminiKey() {
   const keyInput = $('gemini-key');
   if (keyInput) keyInput.value = '';
   state.keyEditing = false;
-  chatState.previousInteractionId = '';
-  chatState.transport = 'interactions';
-  if (state.session && !state.session.ephemeral) {
-    state.session.previousInteractionId = '';
-    state.session.transport = 'interactions';
-    saveSession(state.session);
-  }
+  sessionStore.resetTransport(state.session);
   updateChatKeyUI();
   restoreChatLog();
   showToast('已清除本机 Key');
@@ -1069,7 +979,7 @@ function renderChatIntro() {
 
   const wrap = $('chat-chips');
   if (wrap) {
-    if (isSessionExpired(state.session)) {
+    if (!canContinue(state.session, Date.now())) {
       wrap.style.display = 'none';
       return;
     }
@@ -1096,7 +1006,9 @@ function appendChatMessage(role, text, options = {}) {
   log.scrollTop = log.scrollHeight;
 
   // 只在真正产生内容时落盘；重建历史时传 persist:false
-  if (options.persist) persistMessage(role, text, options.kind);
+  if (options.persist) {
+    sessionStore.appendMessage(state.session, role, text, { kind: options.kind });
+  }
   return el;
 }
 
@@ -1117,14 +1029,15 @@ function updateChatValidityUI() {
   const session = state.session;
   if (!session || !$('chat-panel')) return;
 
-  const expired = isSessionExpired(session);
+  const now = Date.now();
+  const expired = !canContinue(session, now);
 
   const strip = $('chat-validity');
   if (strip) {
     strip.classList.toggle('is-expired', expired);
     strip.innerHTML = expired
       ? `<span class="validity-dot"></span>本次解卦交流已于 ${escapeHtml(formatDateTime(session.expiresAt))} 截止`
-      : `<span class="validity-dot"></span>解卦交流有效期 · 剩余 ${escapeHtml(formatRemaining(session.expiresAt - Date.now()))}（至 ${escapeHtml(formatDateTime(session.expiresAt))}）`;
+      : `<span class="validity-dot"></span>解卦交流有效期 · 剩余 ${escapeHtml(formatRemaining(remainingMs(session, now)))}（至 ${escapeHtml(formatDateTime(session.expiresAt))}）`;
   }
 
   const notice = $('chat-expired');
@@ -1171,7 +1084,7 @@ function updateChatValidityUI() {
 }
 
 function toggleFeedbackComposer() {
-  if (isSessionExpired(state.session)) return;
+  if (!canContinue(state.session, Date.now())) return;
   state.feedbackOpen = !state.feedbackOpen;
   updateChatValidityUI();
   if (state.feedbackOpen) {
@@ -1194,7 +1107,7 @@ function saveFeedback() {
   showToast('反馈已记录在本机');
 
   // 记录反馈后把面板留在原位，方便继续补记
-  if (!isSessionExpired(session)) {
+  if (canContinue(session, Date.now())) {
     state.feedbackOpen = true;
     updateChatValidityUI();
   }
@@ -1242,8 +1155,9 @@ function callInteractions(key, text) {
     // system_instruction 是 interaction 级别的，每轮都要重发
     system_instruction: chatState.system,
   };
-  if (chatState.previousInteractionId) {
-    body.previous_interaction_id = chatState.previousInteractionId;
+  const previousInteractionId = state.session && state.session.previousInteractionId;
+  if (previousInteractionId) {
+    body.previous_interaction_id = previousInteractionId;
   }
   return postJson('https://generativelanguage.googleapis.com/v1beta/interactions', body, key);
 }
@@ -1310,8 +1224,9 @@ function apiError(status, data) {
 
 async function requestGemini(key, text) {
   // 记住上次成功的传输层；首次默认 Interactions API
+  const preferred = state.session && state.session.transport;
   const attempts =
-    chatState.transport === 'generateContent'
+    preferred === 'generateContent'
       ? ['generateContent']
       : ['interactions', 'generateContent'];
 
@@ -1322,12 +1237,11 @@ async function requestGemini(key, text) {
       : await callGenerateContent(key);
 
     if (result.res.ok) {
-      chatState.transport = transport;
       const reply = transport === 'interactions'
         ? parseInteractionReply(result.data)
         : parseGenerateContentReply(result.data);
 
-      if (reply.text) return reply;
+      if (reply.text) return { ...reply, transport };
 
       // in_progress / requires_action 等：明确告知而不是空回复
       const status = result.data && result.data.status;
@@ -1351,7 +1265,7 @@ async function sendChatMessage() {
   if (chatState.busy) return;
 
   // 占卦为一时之像：有效期过后不再解卦，只留反馈
-  if (isSessionExpired(state.session)) {
+  if (!canContinue(state.session, Date.now())) {
     updateChatValidityUI();
     showToast('本次交流已截止，只能记录反馈');
     return;
@@ -1398,17 +1312,14 @@ async function sendChatMessage() {
     if (typing) typing.remove();
     appendChatMessage('model', reply.text);
     chatState.history.push({ role: 'model', text: reply.text });
-    // Interactions API 的服务端会话句柄
-    if (reply.id) chatState.previousInteractionId = reply.id;
 
-    // 成功的一问一答才写入本地记录
-    persistMessage('user', text);
-    persistMessage('model', reply.text);
-    if (state.session && !state.session.ephemeral) {
-      if (reply.id) state.session.previousInteractionId = reply.id;
-      state.session.transport = chatState.transport;
-      saveSession(state.session);
-    }
+    // 成功的一问一答（连同传输层句柄）一次写入本地记录
+    sessionStore.appendExchange(state.session, {
+      question: text,
+      answer: reply.text,
+      interactionId: reply.id,
+      transport: reply.transport,
+    });
   } catch (err) {
     if (typing) typing.remove();
     chatState.history.pop(); // 回滚失败的用户提问，避免污染上下文
@@ -1601,17 +1512,17 @@ function renderHistoryList() {
   const listEl = $('history-list');
   if (!listEl) return;
 
-  const sessions = loadSessions();
-  if (!sessions.length) {
+  const records = sessionStore.list();
+  if (!records.length) {
     listEl.innerHTML = '<p class="history-empty">还没有记录。起一卦，解卦对话会自动存在本机。</p>';
     return;
   }
 
-  listEl.innerHTML = sessions.map((session) => {
+  listEl.innerHTML = records.map((session) => {
     const p = hexagramById(session.primaryId, DATA);
     const t = hexagramById(session.transformedId, DATA);
     const moving = (session.movingIndices || []).length;
-    const expired = isSessionExpired(session);
+    const expired = !canContinue(session, Date.now());
     const rounds = (session.messages || []).filter((m) => !m.kind && m.role === 'user').length;
     const feedbacks = (session.messages || []).filter((m) => m.role === 'feedback').length;
 
@@ -1653,7 +1564,7 @@ function closeHistory() {
 }
 
 function openSessionById(id) {
-  const session = getSessionById(id);
+  const session = sessionStore.get(id);
   if (!session) {
     showToast('这条记录已不在本机');
     renderHistoryList();
@@ -1664,13 +1575,9 @@ function openSessionById(id) {
 }
 
 function clearHistory() {
-  if (!loadSessions().length) return;
+  if (!sessionStore.list().length) return;
   if (!window.confirm('清空本机所有起卦记录？此操作不可撤销。')) return;
-  try {
-    localStorage.removeItem(SESSIONS_KEY);
-  } catch {
-    // 忽略隐私模式下的失败
-  }
+  sessionStore.clear();
   renderHistoryList();
   showToast('本机记录已清空');
 }

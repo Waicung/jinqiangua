@@ -1,8 +1,7 @@
-# Handoff — architecture review & 卦象 deepening
+# Handoff — architecture review & deepening
 
-**Snapshot:** 2026-11-23 · branch `main` · candidate #1 committed as `2cdfaf8` (base `a72b84b`)
-**Next up:** candidate #2 — one 会话 module. Candidate #1 is done and verified.
-The `docs/` files, `.assetsignore` and `CLAUDE.md` pointer are not committed yet.
+**Snapshot:** 2026-11-23 · branch `main` · candidate #2 implemented on top of `db31585` (candidate #1)
+**Next up:** candidate #3 — one mounted 解卦面板. Candidates #1 and #2 are done and verified.
 
 ## How to resume
 
@@ -17,104 +16,135 @@ pi --continue          # most recent session for this directory
 This conversation's Pi session:
 
 ```
-id:   01a205c6-87a9-70ed-8d90-fdb09b5d61f2
-file: /home/waicung/.pi/agent/sessions/--home-waicung-willdev-solo-iching-v2--/2026-11-23T00-20-26-666Z_01a205c6-87a9-70ed-8d90-fdb09b5d61f2.jsonl
+id:   01a205d8-6531-70ed-8d90-fdb3d8394841
+file: /home/waicung/.pi/agent/sessions/--home-waicung-willdev-solo-iching-v2--/2026-11-23T00-39-57-490Z_01a205d8-6531-70ed-8d90-fdb3d8394841.jsonl
 ```
 
-From any directory: `pi --session 01a205c6-87a9-70ed-8d90-fdb09b5d61f2`.
+From any directory: `pi --session 01a205d8-6531-70ed-8d90-fdb3d8394841`.
 
 **New session, another machine, or another agent:** start with:
 
-> Read `docs/HANDOFF.md` and continue with candidate #2.
+> Read `docs/HANDOFF.md` and continue with candidate #3.
 
-The full visual review is saved as `docs/architecture-review-2026-11-23.html`. It is a snapshot taken *before* candidate #1 was implemented, so its header stats describe the old state; the candidate analysis and diagrams are still the reference for #2–#5.
+The full visual review is saved as `docs/architecture-review-2026-11-23.html`. It is a snapshot taken *before* candidates #1 and #2 were implemented, so its header stats describe the old state; the candidate analysis and diagrams are still the reference for #3–#5.
 
-## Done: candidate #1 — 卦象 derivation
+## Done: candidate #2 — one 会话 module
 
 | File | Change |
 | --- | --- |
-| `hexagram.js` | **new** 卦象 module: derivation, hexagram lookups, 爻 vocabulary |
-| `tests/hexagram.test.js` | **new** 19 tests, 1,834 assertions |
-| `app.js` | 1,918 → 1,831 lines; deleted `getPrimaryHexagram`, `getTransformedHexagram`, `getMovingLines`, `computeReading`, local `trigramInfo`, constants, `posLabel` |
-| `index.html` | `app.js` loaded as `<script type="module">` |
-| `sw.js` | pre-caches `/hexagram.js`; `CACHE_NAME` bumped `v7 → v8` |
-| `package.json` | `"test": "bun test"` |
-| `.assetsignore` | excludes `tests/` (and now `docs/`) from deployed assets |
-| `CONTEXT.md` | added the 卦象 term |
+| `session.js` | **new** 会话 store: record, adapters, 交流有效期 gate, 卦历 cap |
+| `tests/session.test.js` | **new** 28 tests, 1,919 assertions across both suites |
+| `app.js` | 1,831 → 1,738 lines; deleted `loadSessions`, `writeSessions`, `saveSession`, `createSession`, `getSessionById`, `isSessionExpired`, `persistMessage`, `CHAT_VALID_MS`, `SESSIONS_KEY`, `SESSION_MAX` |
+| `app.js` | `chatState` is now transient only (`history` / `system` / `busy`); transport handle lives on the 会话 record |
+| `sw.js` | pre-caches `/session.js`; `CACHE_NAME` bumped `v8 → v9` |
+| `CONTEXT.md` | added the 会话 term |
 
 ### Settled decisions — do not re-litigate
 
-1. Module scope = the whole 卦象 vocabulary. `tossCoins` stays in `app.js` (摇卦 is not 卦象).
-2. ES modules, no bundler. `app.js` is a module; the SW stays a classic worker.
-3. The hexagram table is passed explicitly; no `configure()` global, no self-fetching.
-4. `Reading` keys are unchanged: `numbers`, `binary`, `primary`, `transformed`, `movingLines`, `primaryLineTypes`, `transformedLineTypes`. No `movingIndices` field.
-5. `deriveReading` validates and throws: `TypeError` for non-arrays, `RangeError` for anything not exactly six integers in 6–9.
-6. Tests are `tests/hexagram.test.js` against the real `data/iching.json`, excluded from deployment.
-7. JSDoc typedefs + `// @ts-check` on `hexagram.js` only.
-8. Old functions were deleted outright; the `state` bag remains for now.
+1. Module boundary = record + storage adapter. The 卦历 **panel** stays candidate #3.
+2. Two adapters behind one `SessionStorage` seam: `localStorageAdapter` (prod) and `memoryAdapter` (tests).
+3. Time is explicit: the store takes an optional clock `{ now }`, `create` accepts `{ now }`, and `canContinue(session, now)` / `remainingMs(session, now)` take a timestamp. Fake-clock tests.
+4. The `iching_sessions_v1` record shape is unchanged. No migration, no new fields; `ephemeral` is still the only transient extra.
+5. `chatState` no longer mirrors `previousInteractionId` / `transport`; those live only on the 会话 record. `history` / `busy` stay transient.
+6. One gate: every “continue the 解卦” action calls `canContinue`; UI uses its negation for the expired state.
+7. `create(..., { persist: false })` returns an in-memory `ephemeral` record (dev 快捷出结果).
+8. Corrupt records are still silently filtered; quota / privacy-mode failures still degrade silently. Both tested.
 
 ### Interface contract
 
 ```js
 import {
-  LINE_INFO,        // 6/7/8/9 → { name, yang, moving, symbol }
-  posLabel,         // (index, isYang) → 初九 / 六二 / 上六
-  trigramInfo,      // (binary, table) → 上下卦名与符号
-  hexagramFor,      // (binary, table) → Hexagram; throws RangeError on unknown binary
-  hexagramById,     // (id, table) → Hexagram | undefined  (total, for 卦历)
-  deriveReading,    // (numbers, table) → Reading; validates 6 × 6..9
-} from './hexagram.js';
+  CHAT_VALID_MS,        // 24h
+  SESSION_MAX,          // 100
+  SESSIONS_KEY,         // 'iching_sessions_v1'
+  canContinue,          // (session, now) → boolean; the only 交流有效期 gate
+  remainingMs,          // (session, now) → number, clamped at 0
+  conversation,         // (session) → [{role:'user'|'model', text}]  (no intro / feedback)
+  localStorageAdapter,  // (storage, key?) → SessionStorage
+  memoryAdapter,        // (initial?) → SessionStorage
+  createSessionStore,   // (storage, { now?, random? }) → SessionStore
+} from './session.js';
 ```
 
+`SessionStore`:
+
+```js
+create(numbers, reading, { now?, persist? }) → Session
+appendMessage(session, role, text, { kind?, now? }) → SessionMessage | null
+appendExchange(session, { question, answer, interactionId?, transport, now? }) → void
+resetTransport(session) → void
+list() → Session[]              // createdAt desc, corrupt records filtered, ≤ 100
+get(id) → Session | null
+clear() → void
+```
+
+- Adapters only touch bytes (`read` / `write` / `clear`); validation and the 100-record cap live in the store.
+- `appendMessage` returns `null` for ephemeral sessions (no storage, no message list mutation).
+- `appendExchange` is the only success path for 问答: two messages + `transport` + `previousInteractionId` in **one** write. For ephemeral sessions it updates transport in memory without writing.
+- `resetTransport` clears the server-side handle on Key / model change and persists; conversation survives.
+- `canContinue` is false for `null`, missing `expiresAt`, or `now >= expiresAt`.
+- `conversation` is the API context rule (intro and feedback are stored but not replayed).
+
+## Done earlier: candidate #1 — 卦象 derivation
+
+| File | Change |
+| --- | --- |
+| `hexagram.js` | 卦象 module: derivation, lookups, 爻 vocabulary |
+| `tests/hexagram.test.js` | 19 tests |
+| `app.js` | deleted `getPrimaryHexagram`, `getTransformedHexagram`, `getMovingLines`, `computeReading`, local `trigramInfo`, constants, `posLabel` |
+| `index.html` | `app.js` loaded as `<script type="module">` |
+
+- Interface: `LINE_INFO`, `posLabel`, `trigramInfo`, `hexagramFor`, `hexagramById`, `deriveReading`.
 - `binary` is six bits, **bottom line first**; `'1'` = 阳, `'0'` = 阴.
-- A table is the shape of `data/iching.json`.
-- Lookups use `hexagrams[].binary` (verified equal to `lowerTrigram + upperTrigram`), not `trigramLookup`.
+- `deriveReading` validates and throws; `hexagramFor` throws on unknown binary; `hexagramById` is total.
+- `state` still carries `primary` / `transformed` / `movingLines` / numbers / line types for prompt building. Retiring it belongs with candidates #4/#5.
 
 ### Verified
 
 ```sh
-bun run test          # 19 pass, 0 fail, 1834 expect() calls
+bun run test          # 47 pass, 0 fail, 1919 expect() calls
 bunx tsc --noEmit     # clean
 ```
 
-Browser smoke test (`python3 -m http.server` + headless Chrome + CDP) at `?cast=789678`:
-既济 → 随 rendered, 解卦提示 generated (本卦 / 上卦 / 动爻 / 解卦要求 present), chat intro rendered, no runtime exceptions.
+Browser smoke test (headless Chrome over CDP, clean profile + `localStorage.clear()`) against a real six-throw 起卦:
+
+- exactly one `iching_sessions_v1` record, keys unchanged, `expiresAt − createdAt = 86 400 000`, one `intro` message;
+- intro + 4 chips + 有效期 strip rendered, Key row shown;
+- 卦历 shows 1 item, reopening restores the same record and intro without duplicating it;
+- after backdating `expiresAt`: composer / foot hidden, 截止 notice and feedback shown, 生成解卦提示 stays closed, status 已截止;
+- 清空全部记录 empties storage and shows the empty state;
+- 0 runtime exceptions, 0 console errors.
 
 ## Not done / deliberately untouched
 
-- The `state` bag: `showResult` still writes `primary` / `transformed` / `movingLines` / numbers / line types; prompt and chat still read them. Retiring it belongs with candidates #4/#5.
-- Candidates #2–#5 below.
-- SW cache bump means deployed clients pick up the new module on their next load; `force-refresh` remains the escape hatch.
-- Candidate #1 is commit `2cdfaf8`. The docs added after it (`docs/`, plus this file's `.assetsignore`/`CLAUDE.md` pointers) are still uncommitted.
+- 卦历 panel and 解卦面板 stay in `app.js`; the panel is candidate #3.
+- `state.primary` / `transformed` / `movingLines` / numbers / line types bag: candidates #4/#5.
+- `formatClock` / `formatDateTime` / `formatRemaining` remain UI helpers in `app.js`.
+- Ephemeral 会话 still store no messages (same as before); only transport is remembered in memory.
 
-## Next: candidate #2 — one 会话 module
+## Next: candidate #3 — collapse the 解卦面板 into one mounted module
 
-**Files now:** `app.js:697–845` (chatState + 卦历 storage), `app.js:791` (`persistMessage`), `app.js:847–897` (`restoreChatLog`), `app.js:1116–1190` (`updateChatValidityUI`), `app.js:1350–1428` (`sendChatMessage`), `app.js:1574–1675` (卦历 panel).
+**Files now:** `app.js:828–1015` (panel HTML + key UI), `app.js:1018–1122` (validity / feedback), `app.js:1125–1340` (API + send), `app.js:1380–1490` (dev bar), `app.js:1495–1590` (卦历 panel).
 
-**Problem:** one 会话 has three homes — `chatState` (`history` / `transport` / `previousInteractionId`), `state.session` (same fields + `messages` + `expiresAt`), and `localStorage` (`iching_sessions_v1`). Every mutation writes two or three. 交流有效期 is re-decided at 12 call sites (`isSessionExpired` / `blockedByExpiry`), including two bespoke copies in `sendChatMessage` and `toggleFeedbackComposer`.
-
-**Known facts:**
-- `SESSION_MAX = 100`; `CHAT_VALID_MS = 24h`; records are sorted by `createdAt` descending.
-- Dev casts use `ephemeral: true`: no localStorage write, but `state.session` exists in memory.
-- `restoreChatLog` rebuilds `chatState.history` from the record, skipping `kind: 'intro'` and `kind: 'feedback'`.
-- `loadSessions` silently filters corrupt records; `writeSessions` silently ignores quota/privacy-mode failures.
-- `saveKeyFromInput` / `clearGeminiKey` reset `previousInteractionId` and `transport` in *both* `chatState` and the stored session.
+**Problem:** the panel's interface is ~41 element ids, four `document` listeners and `setInterval(updateChatValidityUI, 1000)`; real logic is hidden behind a re-rendered template string and `setTimeout(0)` init ordering.
 
 **Suggested grilling round 1** (if the next session wants to move immediately):
 
-1. **Module boundary** — record + storage adapter only, or also the panel's validity UI? → record + adapter; the panel stays candidate #3.
-2. **Storage seam** — direct localStorage, or two adapters (localStorage in prod, in-memory in tests)? → two adapters, a real seam.
-3. **Time** — pass `now` into `createSession` / `isExpired`, or read `Date.now()` internally? → explicit `now`, fake-clock tests.
-4. **Schema** — keep the `iching_sessions_v1` record shape unchanged? → yes, no migration.
-5. **`chatState` mirror** — remove the duplicated `previousInteractionId` / `transport` now, or wait for #3? → remove them; keep `history` / `busy` transient.
-6. **One gate** — `canContinue(session, now)` used by prompt/chat/feedback, or keep per-action checks? → one gate.
-7. **Ephemeral** — `createSession(..., { persist: false })` returning an unsaved record? → yes.
-8. **Corrupt storage** — keep silent filtering? → yes, and test it.
+1. **Module shape** — `mount(container, { session, store })` + `refresh()` / `destroy()`, or keep the panel as a renderer?
+2. **Session dependency** — does the panel own `state.session` selection, or receive the current 会话 and call `canContinue` itself?
+3. **Chat transport** — keep `history` / `system` / `busy` in the panel module, or move the Gemini client to its own module first?
+4. **Ticker** — one `setInterval` inside the panel, or a shared clock the result page drives?
+5. **Event wiring** — delegated listeners inside the panel root (so `destroy()` can remove them), or the existing global handlers?
+6. **卦历** — same module, or a separate 卦历 panel module in the same pass?
+7. **Prompt block** — part of the panel module, or a sibling?
+8. **Tests** — pure helpers only (no DOM), or add a DOM harness?
 
-Then candidates #3–#5 in the report.
+Then candidates #4–#5 in the report.
 
 ## Constraints worth remembering
 
 - No bundler. New runtime files must be added to `sw.js` `STATIC_ASSETS` **and** `CACHE_NAME` bumped.
 - Anything that should not be served publicly goes in `.assetsignore`.
 - UI copy is Chinese; comments mix Chinese and English.
+- `app.js` is not `// @ts-check`; `hexagram.js` and `session.js` are. `bunx tsc --noEmit` covers both.
+- Tests live in `tests/` and are excluded from deployment.
